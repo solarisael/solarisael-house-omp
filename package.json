@@ -1,0 +1,9 @@
+{
+  "name": "solarisael-house-omp",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "test": "bun test"
+  }
+}
