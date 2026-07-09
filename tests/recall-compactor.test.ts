@@ -144,4 +144,130 @@ describe("recall compactor", () => {
       },
     ]);
   });
+
+  test("nudges cluster rebuilds only when telemetry says clusters are stale", () => {
+    const staleCases = [
+      {
+        name: "never built",
+        clusterStaleness: {
+          built_at: null,
+          chunks_since_build: 12,
+          fraction_unseen: 0.4,
+        },
+        expected: ["never built", "12 chunks since", "40% of corpus unseen", "house/substrate/rebuild_clusters.py"],
+      },
+      {
+        name: "unseen fraction at threshold",
+        clusterStaleness: {
+          built_at: "2026-07-01T12:34:56Z",
+          chunks_since_build: 3,
+          fraction_unseen: 0.15,
+        },
+        expected: ["built 2026-07-01", "3 chunks since", "15% of corpus unseen", "house/substrate/rebuild_clusters.py"],
+      },
+    ];
+
+    for (const { name, clusterStaleness, expected } of staleCases) {
+      const compact = compactRecall({
+        ok: true,
+        found: true,
+        query: name,
+        source: "memory",
+        clusterStaleness,
+      });
+
+      for (const fragment of expected) {
+        expect(compact.clusterNudge).toContain(fragment);
+      }
+    }
+
+    const fresh = compactRecall({
+      ok: true,
+      found: true,
+      query: "fresh clusters",
+      source: "memory",
+      clusterStaleness: {
+        built_at: "2026-07-09T00:00:00Z",
+        chunks_since_build: 2,
+        fraction_unseen: 0.149,
+      },
+    });
+
+    expect(fresh).not.toHaveProperty("clusterNudge");
+  });
+
+  test("passes through bounded cluster resonance telemetry only when profile data exists", () => {
+    const compact = compactRecall({
+      ok: true,
+      found: true,
+      query: "resonance",
+      source: "memory",
+      clusterResonance: {
+        profile: Array.from({ length: 9 }, (_, index) => ({
+          label: `cluster-${index}`,
+          activation: 0.9 - index / 10,
+          member_count: 10 + index,
+          internalScore: "must not leak",
+        })),
+        hot: ["hot-0", "hot-1", "hot-2", "hot-3"],
+      },
+    });
+
+    expect(compact.clusterResonance).toEqual({
+      note: "substrate resonance: what the memory space finds near this query — telemetry, not model-internal state",
+      profile: Array.from({ length: 8 }, (_, index) => ({
+        label: `cluster-${index}`,
+        activation: 0.9 - index / 10,
+        members: 10 + index,
+      })),
+      dormantHot: ["hot-0", "hot-1", "hot-2"],
+    });
+
+    const missing = compactRecall({
+      ok: true,
+      found: true,
+      query: "no resonance",
+      source: "memory",
+      clusterResonance: { hot: ["hot-without-profile"] },
+    });
+
+    expect(missing).not.toHaveProperty("clusterResonance");
+  });
+
+  test("passes through memory handles while bounding embedded memory bodies", () => {
+    const compact = compactRecall({
+      ok: true,
+      found: true,
+      query: "memory handle",
+      source: "memory",
+      memoryHandle: {
+        path: "memory/example.md",
+        title: "Example",
+        memory: {
+          source_path: "memory/example.md",
+          body: repeatedText(6100),
+          frontmatter: { type: "note" },
+        },
+      },
+    });
+
+    expect(compact.memoryHandle).toEqual({
+      path: "memory/example.md",
+      title: "Example",
+      memory: {
+        source_path: "memory/example.md",
+        body: repeatedText(6000),
+        frontmatter: { type: "note" },
+      },
+    });
+
+    const missing = compactRecall({
+      ok: true,
+      found: true,
+      query: "missing memory handle",
+      source: "memory",
+    });
+
+    expect(missing).not.toHaveProperty("memoryHandle");
+  });
 });
