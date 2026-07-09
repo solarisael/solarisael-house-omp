@@ -40,6 +40,15 @@ function defaultHouseState(room, spirit) {
     ignoredSpiritDirective: null,
     lastSpiritChangeAt: null,
     lastUpdatedAt: null,
+    routingMode: {
+      enabled: false,
+      updatedAt: null,
+    },
+    modelDefault: {
+      enabled: false,
+      model: null,
+      updatedAt: null,
+    },
     room,
   };
 }
@@ -65,7 +74,8 @@ function normalizeSpiritName(value) {
 export async function loadRoomState(effectiveRoomDir, room, spirit) {
   try {
     const parsed = JSON.parse(await readFile(statePathForRoom(effectiveRoomDir), "utf8"));
-    return { ...defaultHouseState(room, spirit), ...parsed, room };
+    const defaults = defaultHouseState(room, spirit);
+    return { ...defaults, ...parsed, room, routingMode: { ...defaults.routingMode, ...(parsed.routingMode || {}) }, modelDefault: { ...defaults.modelDefault, ...(parsed.modelDefault || {}) } };
   } catch {
     return defaultHouseState(room, spirit);
   }

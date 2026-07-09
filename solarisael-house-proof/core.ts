@@ -2,7 +2,7 @@
 // OMP stays an adapter: it normalizes OMP events, then calls the shared core.
 
 import { pathToFileURL } from "node:url";
-import { HOUSE_LEDGER_MODULE, HOUSE_MEMORY_MODULE } from "./constants.ts";
+import { HOUSE_LEDGER_MODULE, HOUSE_MEMORY_MODULE, HOUSE_QUERY_ROUTING_MODULE, HOUSE_ROUTING_MODULE } from "./constants.ts";
 
 export async function loadHouseMemory() {
   return await import(pathToFileURL(HOUSE_MEMORY_MODULE).href);
@@ -10,4 +10,12 @@ export async function loadHouseMemory() {
 
 export async function loadHouseLedger() {
   return await import(pathToFileURL(HOUSE_LEDGER_MODULE).href);
+}
+
+export async function loadHouseRouting() {
+  return await import(pathToFileURL(HOUSE_ROUTING_MODULE).href);
+}
+
+export async function loadHouseQueryRouting() {
+  return await import(pathToFileURL(HOUSE_QUERY_ROUTING_MODULE).href);
 }

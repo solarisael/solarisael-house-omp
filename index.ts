@@ -5,6 +5,7 @@
 
 import { isFreshConversation, logUnseenConversationTurns } from "./solarisael-house-proof/conversation-log.ts";
 import { compactRecall, recallWithFallback } from "./solarisael-house-proof/recall.ts";
+import { loadHouseQueryRouting } from "./solarisael-house-proof/core.ts";
 import {
   applyPromptDirectives,
   roomContext,
@@ -16,6 +17,7 @@ import { registerSolarisaelTools } from "./solarisael-house-proof/tools.ts";
 import { contextNudge, keywordReminder, processLessonsReminder } from "./solarisael-house-proof/triggers.ts";
 
 const wokenSessions = new Set();
+const modelDefaultsApplied = new Set();
 
 export default function solarisaelHouseProof(pi) {
   pi.setLabel("Solarisael House");
@@ -45,6 +47,20 @@ export default function solarisaelHouseProof(pi) {
       // Room-state/active-spirit maintenance must never block context injection.
     }
 
+    const modelDefault = houseState?.modelDefault;
+    const modelKey = `${room}:${ctx.cwd || effectiveRoomDir}:${modelDefault?.model || ""}`;
+    if (modelDefault?.enabled && modelDefault.model && !modelDefaultsApplied.has(modelKey) && typeof pi.setModel === "function") {
+      try {
+        const resolved = ctx.models?.resolve?.(modelDefault.model);
+        if (resolved) {
+          await pi.setModel(modelDefault.model);
+          modelDefaultsApplied.add(modelKey);
+        }
+      } catch {
+        // Room model defaults are convenience only; bad model specs must not block context.
+      }
+    }
+
     try {
       await logUnseenConversationTurns(ctx, messages, "context");
     } catch {
@@ -64,6 +80,27 @@ export default function solarisaelHouseProof(pi) {
           "</system-reminder>",
         ].join("\n"),
         display: false,
+        attribution: "agent",
+        timestamp,
+      });
+    }
+
+    if (houseState?.routingMode?.enabled && !existingTypes.has("solarisael-routing-mode")) {
+      additions.push({
+        role: "custom",
+        customType: "solarisael-routing-mode",
+        content: [
+          "<system-reminder>",
+          "Solarisael House worker-routing mode is enabled.",
+          "Default modus operandi for delegable work:",
+          "1. Main model owns intent, inference, and final judgment.",
+          "2. Use house_lane_status/house_dispatch before spawning task/subagents when work is bounded and delegable.",
+          "3. Do not route casual contact, high-level judgment, or exact-sensitive work without exact/retrieve-only context.",
+          "4. Advisor is a separate review channel, not a dispatch lane.",
+          "</system-reminder>",
+        ].join("\n"),
+        display: false,
+        details: { enabled: true },
         attribution: "agent",
         timestamp,
       });
@@ -127,24 +164,28 @@ export default function solarisaelHouseProof(pi) {
 
     if (!existingTypes.has("solarisael-recall-context")) {
       try {
-        const recalled = await recallWithFallback(effectiveRoomDir, room, prompt);
-        if (recalled.ok) {
-          const compact = compactRecall(recalled.result);
-          if (compact.found) {
-            additions.push({
-              role: "custom",
-              customType: "solarisael-recall-context",
-              content: [
-                "<system-reminder>",
-                "Room-local Solarisael recall for this user turn.",
-                JSON.stringify(compact, null, 2),
-                "</system-reminder>",
-              ].join("\n"),
-              display: false,
-              details: { query: compact.query, found: compact.found },
-              attribution: "agent",
-              timestamp,
-            });
+        const { classifyRetrievalQuery } = await loadHouseQueryRouting();
+        const queryRoute = classifyRetrievalQuery(prompt);
+        if (queryRoute.shouldAutoRecall) {
+          const recalled = await recallWithFallback(effectiveRoomDir, room, prompt);
+          if (recalled.ok) {
+            const compact = compactRecall(recalled.result);
+            if (compact.found) {
+              additions.push({
+                role: "custom",
+                customType: "solarisael-recall-context",
+                content: [
+                  "<system-reminder>",
+                  "Room-local Solarisael recall for this user turn.",
+                  JSON.stringify(compact, null, 2),
+                  "</system-reminder>",
+                ].join("\n"),
+                display: false,
+                details: { query: compact.query, found: compact.found, queryRoute },
+                attribution: "agent",
+                timestamp,
+              });
+            }
           }
         }
       } catch {

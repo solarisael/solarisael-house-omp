@@ -25,6 +25,7 @@ export function substratePaths(sharedRoot) {
   };
 }
 
+
 export function runWslDiagnostic({ argv, stdin, timeoutMs = DIAGNOSTIC_TIMEOUT_MS }) {
   return new Promise((resolve) => {
     const child = spawn("wsl.exe", argv, {
@@ -93,6 +94,30 @@ export async function writeSessionMemory({ sharedRoot, room, title, body, backup
   const summary = String(probe.stdout || "").trim();
   const idMatch = /id=(\d+)/.exec(summary);
   return { ok: true, id: idMatch ? Number(idMatch[1]) : null, summary, sourcePath: resolvedSourcePath };
+}
+
+// Lesson-store write path (remember store routing). All lesson scripts share
+// the shape: --title inline, lesson text on stdin (--lesson-stdin), optional
+// scalar/tag flags built by stores.buildStoreArgs. Body goes via stdin, never
+// inline argv — cross-shell-boundary payloads break inline (lesson 163).
+export async function writeLessonStore({ sharedRoot, store, title, body, extraArgs = [], timeoutMs = WRITE_TIMEOUT_MS }) {
+  const { dir } = substratePaths(sharedRoot);
+  const script = path.join(dir, store.script);
+  const argv = [
+    "--cd", "~",
+    "python3", windowsPathToWsl(script),
+    "--title", String(title || "OMP lesson"),
+    "--lesson-stdin",
+    ...extraArgs,
+  ];
+  if (store.noBackup) argv.push("--no-backup");
+  const probe = await runWslDiagnostic({ argv, stdin: body, timeoutMs });
+  if (probe.timedOut) return { ok: false, error: `${store.script} timed out` };
+  if (probe.spawnError) return { ok: false, error: probe.spawnError };
+  if (probe.code !== 0) return { ok: false, error: String(probe.stderr || "").trim() || `${store.script} exited ${probe.code}` };
+  const summary = String(probe.stdout || "").trim();
+  const idMatch = /id=\s*(\d+)/.exec(summary);
+  return { ok: true, id: idMatch ? Number(idMatch[1]) : null, summary };
 }
 
 export async function catchBoat(sharedRoot, room) {
