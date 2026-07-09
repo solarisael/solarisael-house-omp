@@ -173,6 +173,19 @@ describe("OMP adapter registration", () => {
         fields: {
           title: { type: "string" },
           body: { type: "string" },
+          kind: {
+            type: "enum",
+            values: ["memory", "coding-lesson", "project-lesson", "writing-lesson", "audio-lesson"],
+            optional: true,
+          },
+          threads: { type: "array", element: { type: "string" }, optional: true },
+          shape: { type: "string", optional: true },
+          voice: { type: "string", optional: true },
+          scope: { type: "string", optional: true },
+          project: { type: "string", optional: true },
+          proofPattern: { type: "string", optional: true },
+          triggerContext: { type: "string", optional: true },
+          tags: { type: "array", element: { type: "string" }, optional: true },
         },
       },
       wake: { type: "object", fields: {} },
@@ -218,6 +231,7 @@ describe("OMP adapter registration", () => {
           },
           acceptance: { type: "array", element: { type: "string" }, optional: true },
           risk: { type: "enum", values: ["low", "medium", "high"], optional: true },
+          model: { type: "string", optional: true },
         },
       },
       house_routing_mode: {
