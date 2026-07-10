@@ -28,7 +28,7 @@ export function isScratchName(p: string): boolean {
 // .opencode (our strata grew up on opencode) — plus the Obsidian vault root.
 // markerExists is injectable so the logic stays unit-testable without disk.
 const TRACKED_MARKERS = [".git", ".omp", ".opencode"];
-const VAULT_ROOT = "C:\\Solarisael\\Obsidian\\obsidian";
+const VAULT_ROOT = process.env.SOLARISAEL_VAULT_ROOT || path.join(os.homedir(), "Solarisael");
 
 export function dirHasTrackedMarker(dir: string): boolean {
   for (const marker of TRACKED_MARKERS) {

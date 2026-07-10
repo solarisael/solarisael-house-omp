@@ -6,7 +6,7 @@ import {
   detectKeywordTriggers,
   formatProcessLessonsBanner,
   matchProcessShape,
-} from "file:///C:/Projects/solarisael-house/src/index.ts";
+} from "../../solarisael-house/src/index.ts";
 import { conversationTurns } from "./conversation-log.ts";
 import { runCodingLessons } from "./substrate.ts";
 import { messageText } from "./text.ts";

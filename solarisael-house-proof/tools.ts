@@ -4,6 +4,7 @@
 import { compactRecall, recallWithFallback } from "./recall.ts";
 import {
   loadRoomState,
+  normalizeSpiritName,
   roomContext,
   saveRoomState,
   statePathForRoom,
@@ -12,6 +13,15 @@ import {
 import { catchBoat, runCodingLessons, writeLessonStore, writeSessionMemory } from "./substrate.ts";
 import { REMEMBER_STORES, buildStoreArgs } from "./stores.ts";
 import { dispatchWorker, laneStatus } from "./routing.ts";
+
+function refuseToolResult(error) {
+  const result = { ok: false, error };
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    details: result,
+  };
+}
 
 export function registerSolarisaelTools(pi) {
   const z = pi.zod;
@@ -139,19 +149,29 @@ export function registerSolarisaelTools(pi) {
   pi.registerTool({
     name: "set_room_state",
     label: "Solarisael Set Room State",
-    description: "Update safe room agency fields: operator and embodiedSpirit (Kodo/Kintsu only). Also refreshes active_spirit.md.",
+    description: "Update safe room agency fields: operator and embodiedSpirit. Also refreshes active_spirit.md.",
     parameters: z.object({
-      operator: z.string().optional().describe("Operator display name, usually Sol."),
-      embodiedSpirit: z.enum(["Kintsu", "Kodo"]).optional().describe("Active supported room spirit."),
+      operator: z.string().optional().describe("Operator display name."),
+      embodiedSpirit: z.string().optional().describe("The room identity's true/display name."),
     }),
     approval: "write",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const { room, spirit, effectiveRoomDir } = roomContext(ctx.cwd);
       const current = await loadRoomState(effectiveRoomDir, room, spirit);
+      const embodiedSpirit = params.embodiedSpirit === undefined
+        ? null
+        : normalizeSpiritName(params.embodiedSpirit);
+      if (params.embodiedSpirit !== undefined && !embodiedSpirit) {
+        return refuseToolResult("embodiedSpirit must be 1-80 characters and contain no line breaks or '|'");
+      }
+      const operator = params.operator === undefined ? null : normalizeSpiritName(params.operator);
+      if (params.operator !== undefined && !operator) {
+        return refuseToolResult("operator must be 1-80 characters and contain no line breaks or '|'");
+      }
       const next = await saveRoomState(effectiveRoomDir, {
         ...current,
-        ...(params.operator ? { operator: params.operator } : {}),
-        ...(params.embodiedSpirit ? { embodiedSpirit: params.embodiedSpirit, agentName: params.embodiedSpirit, lastSpiritChangeAt: new Date().toISOString() } : {}),
+        ...(operator ? { operator } : {}),
+        ...(embodiedSpirit ? { embodiedSpirit, agentName: embodiedSpirit, lastSpiritChangeAt: new Date().toISOString() } : {}),
       });
       await writeActiveSpiritSnapshot(effectiveRoomDir, next);
       return { content: [{ type: "text", text: JSON.stringify({ path: statePathForRoom(effectiveRoomDir), state: next }, null, 2) }], details: { room, ok: true } };

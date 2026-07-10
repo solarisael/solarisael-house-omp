@@ -194,7 +194,7 @@ describe("OMP adapter registration", () => {
         type: "object",
         fields: {
           operator: { type: "string", optional: true },
-          embodiedSpirit: { type: "enum", values: ["Kintsu", "Kodo"], optional: true },
+          embodiedSpirit: { type: "string", optional: true },
         },
       },
       coding_lessons: {

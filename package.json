@@ -1,9 +1,14 @@
 {
   "name": "solarisael-house-omp",
   "version": "0.1.0",
+  "description": "OMP adapter and portable distribution for Solarisael House.",
+  "author": "Sol",
+  "license": "Apache-2.0",
+  "repository": "github:solarisael/solarisael-house-omp",
   "type": "module",
   "main": "index.ts",
   "scripts": {
+    "build:portable": "bun run build-portable.ts",
     "test": "bun test"
   }
 }

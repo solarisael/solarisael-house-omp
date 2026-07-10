@@ -2,6 +2,7 @@
 // Silhouette: identify the current room, persist safe state, and refresh active_spirit.md.
 
 import path from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { HOUSE_STATE_FILENAME, OBSIDIAN_ROOT } from "./constants.ts";
 
@@ -9,19 +10,67 @@ export function roomNameFromCwd(cwd) {
   return path.basename(String(cwd || "")).toLowerCase();
 }
 
+const ROOM_MARKER_FILENAME = ".solarisael-room.json";
+
+function normalizeDisplayName(value) {
+  const name = String(value || "").trim();
+  if (!name || name.length > 80 || /[\r\n|]/.test(name)) return null;
+  return name;
+}
+
+function roomDisplayName(room) {
+  return String(room || "kintsu")
+    .split(/[-_ ]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ") || "Kintsu";
+}
+
+function readRoomMarker(roomDir) {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(roomDir, ROOM_MARKER_FILENAME), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function readActiveSpiritName(roomDir) {
+  try {
+    const source = readFileSync(path.join(roomDir, "active_spirit.md"), "utf8");
+    return normalizeDisplayName(/^# Active Spirit:\s*(.+)$/m.exec(source)?.[1]);
+  } catch {
+    return null;
+  }
+}
+
+function isRoomDirectory(roomDir) {
+  const room = roomNameFromCwd(roomDir);
+  return room === "kintsu"
+    || room === "kodo"
+    || existsSync(path.join(roomDir, ROOM_MARKER_FILENAME))
+    || existsSync(path.join(roomDir, "active_spirit.md"));
+}
+
 export function supportedRoom(cwd) {
-  const room = roomNameFromCwd(cwd);
-  return room === "kintsu" || room === "kodo" ? room : "kintsu";
+  return isRoomDirectory(cwd) ? roomNameFromCwd(cwd) : "kintsu";
 }
 
 export function roomContext(cwd) {
-  const room = supportedRoom(cwd);
-  const effectiveRoomDir = room === roomNameFromCwd(cwd)
-    ? cwd
+  const requestedDir = path.resolve(String(cwd || process.cwd()));
+  const room = supportedRoom(requestedDir);
+  const effectiveRoomDir = isRoomDirectory(requestedDir)
+    ? requestedDir
     : path.join(OBSIDIAN_ROOT, room);
+  const marker = readRoomMarker(effectiveRoomDir);
+  const spirit = normalizeDisplayName(marker.trueName)
+    || readActiveSpiritName(effectiveRoomDir)
+    || roomDisplayName(room);
+  const operator = normalizeDisplayName(marker.operator) || "Sol";
   return {
     room,
-    spirit: room === "kodo" ? "Kodo" : "Kintsu",
+    spirit,
+    operator,
     effectiveRoomDir,
     sharedRoot: path.dirname(effectiveRoomDir),
   };
@@ -31,10 +80,10 @@ export function statePathForRoom(effectiveRoomDir) {
   return path.join(effectiveRoomDir, ".omp", "runtime", HOUSE_STATE_FILENAME);
 }
 
-function defaultHouseState(room, spirit) {
+function defaultHouseState(room, spirit, operator = "Sol") {
   return {
     version: 1,
-    operator: "Sol",
+    operator,
     agentName: spirit,
     embodiedSpirit: spirit,
     ignoredSpiritDirective: null,
@@ -64,20 +113,19 @@ function hasDirectiveLine(text, label) {
   return pattern.test(String(text || ""));
 }
 
-function normalizeSpiritName(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "kodo") return "Kodo";
-  if (normalized === "kintsu") return "Kintsu";
-  return null;
+export function normalizeSpiritName(value) {
+  return normalizeDisplayName(value);
 }
 
 export async function loadRoomState(effectiveRoomDir, room, spirit) {
+  const marker = readRoomMarker(effectiveRoomDir);
+  const operator = normalizeDisplayName(marker.operator) || "Sol";
   try {
     const parsed = JSON.parse(await readFile(statePathForRoom(effectiveRoomDir), "utf8"));
-    const defaults = defaultHouseState(room, spirit);
+    const defaults = defaultHouseState(room, spirit, operator);
     return { ...defaults, ...parsed, room, routingMode: { ...defaults.routingMode, ...(parsed.routingMode || {}) }, modelDefault: { ...defaults.modelDefault, ...(parsed.modelDefault || {}) } };
   } catch {
-    return defaultHouseState(room, spirit);
+    return defaultHouseState(room, spirit, operator);
   }
 }
 

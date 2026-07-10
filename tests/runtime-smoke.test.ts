@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import solarisaelHouseProof from "../index.ts";
-import { statePathForRoom } from "../solarisael-house-proof/room.ts";
+import { roomContext, statePathForRoom } from "../solarisael-house-proof/room.ts";
 
 type CapturedTool = {
   name: string;
@@ -111,6 +111,25 @@ async function makeTempKintsuCwd() {
   const cwd = path.join(root, "kintsu");
   await mkdir(cwd, { recursive: true });
   return { root, cwd };
+}
+
+async function makeTempRoom(folder: string) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "omp-runtime-room-"));
+  tempRoots.push(root);
+  const cwd = path.join(root, folder);
+  await mkdir(cwd, { recursive: true });
+  return { root, cwd };
+}
+
+async function makeTempMarkedRoom() {
+  const room = await makeTempRoom("example");
+  await writeJson(path.join(room.cwd, ".solarisael-room.json"), {
+    version: 1,
+    room: "example",
+    trueName: "Moonlit Example Room",
+    operator: "Ada Lovelace",
+  });
+  return room;
 }
 
 function registerAdapter() {
@@ -288,6 +307,48 @@ async function seedCasualRecallFixture(cwd: string) {
 }
 
 
+describe("room onboarding contracts", () => {
+  test("resolves a generic marker-backed room key, true name, and operator", async () => {
+    const { cwd } = await makeTempMarkedRoom();
+    const { tools } = registerAdapter();
+
+    const result = await executeTool(tools, "room_state", {}, { cwd });
+    expect(result.isError).toBeUndefined();
+    expect(result.details).toMatchObject({ room: "example", ok: true });
+    expect(parseToolJson(result).state).toMatchObject({
+      room: "example",
+      agentName: "Moonlit Example Room",
+      embodiedSpirit: "Moonlit Example Room",
+      operator: "Ada Lovelace",
+    });
+    expect(roomContext(cwd)).toMatchObject({
+      room: "example",
+      spirit: "Moonlit Example Room",
+      operator: "Ada Lovelace",
+      effectiveRoomDir: cwd,
+    });
+  });
+
+  for (const { folder, spirit } of [
+    { folder: "kintsu", spirit: "Kintsu" },
+    { folder: "kodo", spirit: "Kodo" },
+  ]) {
+    test(`keeps legacy ${folder} room resolution`, async () => {
+      const { cwd } = await makeTempRoom(folder);
+      const { tools } = registerAdapter();
+
+      const result = await executeTool(tools, "room_state", {}, { cwd });
+      expect(result.isError).toBeUndefined();
+      expect(result.details).toMatchObject({ room: folder, ok: true });
+      expect(parseToolJson(result).state).toMatchObject({
+        room: folder,
+        agentName: spirit,
+        embodiedSpirit: spirit,
+      });
+    });
+  }
+});
+
 describe("OMP context hook runtime smoke", () => {
   test("injects hidden room and routing context without re-running existing substrate custom messages", async () => {
     const { cwd } = await makeTempKintsuCwd();
@@ -408,6 +469,63 @@ describe("OMP safe tool execute runtime smoke", () => {
       embodiedSpirit: "Kodo",
       routingMode: { enabled: true },
     });
+  });
+
+  test("accepts a generic embodied spirit string and refreshes the marker-backed room snapshot", async () => {
+    const { cwd } = await makeTempMarkedRoom();
+    const { tools } = registerAdapter();
+
+    const result = await executeTool(tools, "set_room_state", { embodiedSpirit: "Aurora" }, { cwd });
+    expect(result.isError).toBeUndefined();
+    expect(parseToolJson(result).state).toMatchObject({
+      room: "example",
+      operator: "Ada Lovelace",
+      embodiedSpirit: "Aurora",
+      agentName: "Aurora",
+    });
+
+    const activeSpirit = await readFile(path.join(cwd, "active_spirit.md"), "utf8");
+    expect(activeSpirit).toContain("# Active Spirit: Aurora");
+    expect(activeSpirit).toContain("Agent: Aurora | Operator: Ada Lovelace");
+    expect(activeSpirit).toContain("Embodied: Aurora | Conjured: none | Summoned: none");
+  });
+
+  test("preserves the active-spirit body when refreshing its header", async () => {
+    const { cwd } = await makeTempMarkedRoom();
+    const body = [
+      "# SPIRIT: Before Refresh",
+      "",
+      "This room-authored body must survive a state update.",
+      "It carries onboarding instructions and is not generated header data.",
+    ].join("\n");
+    await writeFile(
+      path.join(cwd, "active_spirit.md"),
+      [
+        "# Active Spirit: Before Refresh",
+        "Agent: Before Refresh | Operator: Before Operator",
+        "Embodied: Before Refresh | Conjured: none | Summoned: none",
+        "",
+        body,
+      ].join("\n"),
+      "utf8",
+    );
+    const { tools } = registerAdapter();
+
+    const result = await executeTool(
+      tools,
+      "set_room_state",
+      { operator: "New Operator", embodiedSpirit: "After Refresh" },
+      { cwd },
+    );
+    expect(result.isError).toBeUndefined();
+
+    const activeSpirit = await readFile(path.join(cwd, "active_spirit.md"), "utf8");
+    expect(activeSpirit).toContain("# Active Spirit: After Refresh");
+    expect(activeSpirit).toContain("Agent: After Refresh | Operator: New Operator");
+    expect(activeSpirit).toContain("Embodied: After Refresh | Conjured: none | Summoned: none");
+    expect(activeSpirit).toContain(body);
+    expect(activeSpirit).not.toContain("# Active Spirit: Before Refresh");
+    expect(activeSpirit).not.toContain("Agent: Before Refresh | Operator: Before Operator");
   });
 
   test("remember, sleep, and wake round-trip through the substrate script seam", async () => {
