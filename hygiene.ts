@@ -8,10 +8,12 @@
 //
 // Pure decision functions are exported for unit testing; the default factory
 // only wires them to pi events. No TTSR, no abort, no replaceMessages.
-
 import { existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { resolveObservedProject, type ProjectContext, type ToolCallLike } from "./solarisael-house-proof/project-context.ts";
+import { runLessonContext, type LessonContext } from "./solarisael-house-proof/lesson-context.ts";
+import { roomContext } from "./solarisael-house-proof/room.ts";
 
 // A "scratch-shaped" name = throwaway artifact that must never land in a
 // synced/tracked tree. Conservative on purpose: false positives erode trust.
@@ -91,20 +93,108 @@ export function evaluateBashNudge(command: string): string | null {
   return null;
 }
 
-export default function solarisaelHygiene(pi) {
-  pi.setLabel?.("Solarisael Hygiene");
+export type HygieneDependencies = {
+  resolveProject?: (call: ToolCallLike) => Promise<ProjectContext | null>;
+  runLessons?: (input: Parameters<typeof runLessonContext>[0]) => Promise<LessonContext>;
+};
 
-  pi.on("tool_call", async (event) => {
-    if (event.toolName !== "write") return;
-    const decision = evaluateWrite(String(event.input?.path ?? ""));
-    if (decision) return { block: true, reason: decision.reason };
+const EXPLORATION = new Set(["read", "grep", "glob", "lsp", "ast_grep", "ast-grep", "bash"]);
+const MUTATING = /^(edit|write|ast_edit|ast-edit|lsp(?:_|-)?(?:apply|edit|write|mutat))/i;
+
+function callWithObservedInput(event: any): ToolCallLike {
+  const input = event?.input && typeof event.input === "object" ? { ...(event.input as Record<string, unknown>) } : {};
+  if (event?.toolName === "bash" && !("path" in input)) {
+    const command = String(input.command ?? "");
+    const match = command.match(/(?:[A-Za-z]:[\\/]|\/)[^"'`\s;|]+/);
+    if (match) input.path = match[0];
+  }
+  return { name: event?.toolName, input };
+}
+
+function termsFor(toolName: string): string[] {
+  const name = toolName.replace(/[-_]+/g, " ").trim().toLowerCase();
+  return [...new Set([name, ...name.split(/\s+/).filter((term) => term.length > 2)])].slice(0, 4);
+}
+
+function lessonReminder(project: ProjectContext, lessons: LessonContext): { type: "text"; text: string } {
+  const compact = (value: unknown[]) => JSON.stringify(value.slice(0, 4));
+  return {
+    type: "text",
+    text: [
+      "<system-reminder>",
+      `Active project: ${project.project} (${project.root})`,
+      `Coding lessons: ${compact(lessons.codingLessons)}`,
+      `Project lessons: ${compact(lessons.projectLessons)}`,
+      "Hidden tool context only; do not persist or render.",
+      "</system-reminder>",
+    ].join("\n"),
+  };
+}
+
+export default function solarisaelHygiene(pi, dependencies: HygieneDependencies = {}) {
+  pi.setLabel?.("Solarisael Hygiene");
+  const resolveProject = dependencies.resolveProject ?? ((call) => resolveObservedProject(call));
+  const runLessons = dependencies.runLessons ?? runLessonContext;
+  const queried = new Set<string>();
+  const lessonCache = new Map<string, LessonContext>();
+
+  async function inspect(event: any, ctx: any, preflight = false) {
+    const toolName = String(event?.toolName ?? "");
+    const call = callWithObservedInput(event);
+    const project = await resolveProject(call).catch(() => null);
+    if (!project) return null;
+    const key = `${project.root}\0${project.project}`;
+    const fresh = !queried.has(key);
+    if (fresh) {
+      queried.add(key);
+      const room = roomContext(ctx?.cwd);
+      const lessons = await runLessons({
+        effectiveRoomDir: room.effectiveRoomDir,
+        room: room.room,
+        projects: [project.project],
+        terms: termsFor(toolName),
+        limit: 4,
+      }).then((value) => ({
+        codingLessons: Array.isArray(value?.codingLessons) ? value.codingLessons : [],
+        projectLessons: Array.isArray(value?.projectLessons) ? value.projectLessons : [],
+        match: value?.match && typeof value.match === "object" ? value.match : {},
+      })).catch(() => ({ codingLessons: [], projectLessons: [], match: {} }));
+      lessonCache.set(key, lessons);
+      return { project, key, lessons, fresh };
+    }
+    const lessons = lessonCache.get(key) ?? { codingLessons: [], projectLessons: [], match: {} };
+    return { project, key, lessons, fresh };
+  }
+
+  pi.on("tool_call", async (event, ctx) => {
+    const toolName = String(event?.toolName ?? "");
+    if (toolName === "write") {
+      const decision = evaluateWrite(String(event.input?.path ?? ""));
+      if (decision) return { block: true, reason: decision.reason };
+    }
+    if (!MUTATING.test(toolName)) return;
+    const observed = await inspect(event, ctx, true);
+    if (!observed || !observed.fresh) return;
+    const hasLessons = observed.lessons.codingLessons.length || observed.lessons.projectLessons.length;
+    if (hasLessons) {
+      return {
+        block: true,
+        reason: `Project preflight loaded for ${observed.project.project}. Retry this ${toolName} call so the automatic project context is applied.`,
+      };
+    }
   });
 
-  pi.on("tool_result", async (event) => {
-    if (event.isError || event.toolName !== "bash") return;
-    const note = evaluateBashNudge(String(event.input?.command ?? ""));
-    if (!note) return;
-    const reminder = { type: "text", text: `<system-reminder>hygiene: ${note}</system-reminder>` };
-    return { content: [reminder, ...(event.content ?? [])] };
+  pi.on("tool_result", async (event, ctx) => {
+    if (event?.isError) return;
+    const toolName = String(event?.toolName ?? "");
+    const note = toolName === "bash" ? evaluateBashNudge(String(event.input?.command ?? "")) : null;
+    const shouldInspect = EXPLORATION.has(toolName);
+    const observed = shouldInspect ? await inspect(event, ctx) : null;
+    const content = Array.isArray(event?.content) ? event.content : [];
+    const additions = [];
+    if (note) additions.push({ type: "text", text: `<system-reminder>hygiene: ${note}</system-reminder>` });
+    if (observed?.fresh) additions.push(lessonReminder(observed.project, observed.lessons));
+    if (!additions.length) return;
+    return { content: [...additions, ...content] };
   });
 }

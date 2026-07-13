@@ -174,7 +174,7 @@ describe("portable bundle builder safety", () => {
     await mkdir(path.join(stagedAdapter, "commands"), { recursive: true });
     await mkdir(path.join(stagedAdapter, "solarisael-house-proof"), { recursive: true });
     await cp(portableBuilder, stagedBuilder);
-    for (const filename of ["README.md", "INSTALL.md", "IDENTITY_GUIDE.md", "LICENSE", "NOTICE"]) {
+    for (const filename of ["README.md", "INSTALL.md", "USAGE.md", "IDENTITY_GUIDE.md", "LICENSE", "NOTICE"]) {
       await cp(path.join(adapterRoot, "..", "solarisael-house", filename), path.join(core, filename));
     }
     for (const filename of ["README.md", "LICENSE", "NOTICE", "verify-install.ts"]) {
@@ -223,10 +223,10 @@ describe("portable bundle builder safety", () => {
     expect(entries).toEqual(expect.arrayContaining([
       "README.md",
       "INSTALL.md",
+      "USAGE.md",
       "IDENTITY_GUIDE.md",
       "LICENSE",
       "NOTICE",
-      "verify-install.ts",
       "starter-room/example/.solarisael-room.json",
       "starter-room/example/AGENTS.md",
       "starter-room/example/active_spirit.md",
@@ -236,7 +236,9 @@ describe("portable bundle builder safety", () => {
       "solarisael-house-omp/README.md",
       "solarisael-house-omp/LICENSE",
       "solarisael-house-omp/NOTICE",
+      "solarisael-house-omp/verify-install.ts",
     ]));
+    expect(entries).not.toContain("verify-install.ts");
   });
   test("verifies a complete generic room and reports a missing host context entrypoint", async () => {
     const root = await makeTempRoot("omp-portable-verify-");

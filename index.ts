@@ -6,6 +6,8 @@
 import { isFreshConversation, logUnseenConversationTurns } from "./solarisael-house-proof/conversation-log.ts";
 import { compactRecall, recallWithFallback } from "./solarisael-house-proof/recall.ts";
 import { loadHouseQueryRouting } from "./solarisael-house-proof/core.ts";
+import { resolveEntities } from "./solarisael-house-proof/entity-resolution.ts";
+import { automaticRecallViewport, createRecallViewportSession } from "./solarisael-house-proof/recall-viewport.ts";
 import {
   applyPromptDirectives,
   roomContext,
@@ -18,6 +20,7 @@ import { contextNudge, keywordReminder, processLessonsReminder } from "./solaris
 
 const wokenSessions = new Set();
 const modelDefaultsApplied = new Set();
+const recallViewportSessions = new Map();
 
 export default function solarisaelHouseProof(pi) {
   pi.setLabel("Solarisael House");
@@ -165,23 +168,52 @@ export default function solarisaelHouseProof(pi) {
     if (!existingTypes.has("solarisael-recall-context")) {
       try {
         const { classifyRetrievalQuery } = await loadHouseQueryRouting();
-        const queryRoute = classifyRetrievalQuery(prompt);
+        const preliminaryRoute = classifyRetrievalQuery(prompt);
+        const resolution = preliminaryRoute.entityResolutionSuggested
+          ? await resolveEntities({ room, roomDir: effectiveRoomDir, query: prompt })
+          : { ok: true, matches: [] };
+        const queryRoute = classifyRetrievalQuery(prompt, {
+          recognizedEntities: resolution.matches.map((match) => match.canonicalName),
+        });
         if (queryRoute.shouldAutoRecall) {
-          const recalled = await recallWithFallback(effectiveRoomDir, room, prompt);
+          const recalled = await recallWithFallback(effectiveRoomDir, room, queryRoute.recallQuery || prompt);
           if (recalled.ok) {
             const compact = compactRecall(recalled.result);
-            if (compact.found) {
+            const viewportKey = `${ctx?.sessionID || ctx?.sessionId || "session"}:${room}`;
+            let viewportSession = recallViewportSessions.get(viewportKey);
+            if (!viewportSession) {
+              viewportSession = createRecallViewportSession();
+              recallViewportSessions.set(viewportKey, viewportSession);
+              if (recallViewportSessions.size >= 64) {
+                recallViewportSessions.delete(recallViewportSessions.keys().next().value);
+              }
+            }
+            const viewport = automaticRecallViewport(compact, { session: viewportSession });
+            const filteredCanonMatches = viewport.keptCandidates.length ? compact.canonMatches : [];
+            const automaticCompact = {
+              ...compact,
+              retrievalCandidates: viewport.keptCandidates,
+              canonMatches: filteredCanonMatches,
+              semanticChunks: [],
+              contentChunks: [],
+              found: Boolean(
+                viewport.keptCandidates.length
+                || filteredCanonMatches.length
+                || compact.dateMatches?.length
+              ),
+            };
+            if (automaticCompact.found) {
               additions.push({
                 role: "custom",
                 customType: "solarisael-recall-context",
                 content: [
                   "<system-reminder>",
                   "Room-local Solarisael recall for this user turn.",
-                  JSON.stringify(compact, null, 2),
+                  JSON.stringify(automaticCompact, null, 2),
                   "</system-reminder>",
                 ].join("\n"),
                 display: false,
-                details: { query: compact.query, found: compact.found, queryRoute },
+                details: { query: automaticCompact.query, found: automaticCompact.found, queryRoute, viewport: viewport.diagnostics },
                 attribution: "agent",
                 timestamp,
               });

@@ -68,10 +68,13 @@ try {
     await cp(path.join(adapterRoot, filename), path.join(stagingRoot, "solarisael-house-omp", filename));
   }
 
-  for (const filename of ["README.md", "INSTALL.md", "IDENTITY_GUIDE.md", "LICENSE", "NOTICE"]) {
+  for (const filename of ["README.md", "INSTALL.md", "USAGE.md", "IDENTITY_GUIDE.md", "LICENSE", "NOTICE"]) {
     await cp(path.join(coreRoot, filename), path.join(stagingRoot, filename));
   }
-  await cp(path.join(adapterRoot, "verify-install.ts"), path.join(stagingRoot, "verify-install.ts"));
+  await cp(
+    path.join(adapterRoot, "verify-install.ts"),
+    path.join(stagingRoot, "solarisael-house-omp", "verify-install.ts"),
+  );
   await cp(
     path.join(adapterRoot, "starter-room"),
     path.join(stagingRoot, "starter-room"),

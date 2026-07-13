@@ -111,6 +111,7 @@ function registerAdapter() {
 const expectedToolNames = [
   "recall",
   "remember",
+  "delete_lesson",
   "wake",
   "room_state",
   "set_room_state",
@@ -143,6 +144,7 @@ describe("OMP adapter registration", () => {
     expect(toolMap(tools)).toMatchObject({
       recall: { approval: "read" },
       remember: { approval: "write" },
+      delete_lesson: { approval: "write" },
       wake: { approval: "read" },
       room_state: { approval: "read" },
       set_room_state: { approval: "write" },
@@ -186,6 +188,14 @@ describe("OMP adapter registration", () => {
           proofPattern: { type: "string", optional: true },
           triggerContext: { type: "string", optional: true },
           tags: { type: "array", element: { type: "string" }, optional: true },
+        },
+      },
+      delete_lesson: {
+        type: "object",
+        fields: {
+          kind: { type: "enum", values: ["coding-lesson", "project-lesson"] },
+          id: { type: "string" },
+          expectedTitle: { type: "string" },
         },
       },
       wake: { type: "object", fields: {} },

@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import {
   CODING_LESSONS_SCRIPT,
   DIAGNOSTIC_TIMEOUT_MS,
+  HOUSE_CORE_ROOT,
   WRITE_TIMEOUT_MS,
 } from "./constants.ts";
 
@@ -168,5 +169,28 @@ export async function runCodingLessons(effectiveRoomDir, room, shape) {
     };
   } catch {
     return { ok: false, lessons: [], taxonomy: null };
+  }
+}
+
+export async function deleteLesson({ sharedRoot, effectiveRoomDir, kind, id, expectedTitle, timeoutMs = WRITE_TIMEOUT_MS }) {
+  const script = path.join(HOUSE_CORE_ROOT, "src", "delete-lesson.py");
+  const argv = [
+    "--cd", "~",
+    "python3", windowsPathToWsl(script),
+    "--room-dir", windowsPathToWsl(effectiveRoomDir),
+    "--kind", String(kind),
+    "--id", String(id),
+    "--expected-title", String(expectedTitle),
+  ];
+  const probe = await runWslDiagnostic({ argv, stdin: "", timeoutMs });
+  if (probe.timedOut) return { ok: false, deleted: false, error: "delete-lesson timed out" };
+  if (probe.spawnError) return { ok: false, deleted: false, error: probe.spawnError };
+  if (probe.code !== 0) return { ok: false, deleted: false, error: String(probe.stderr || "").trim() || `delete-lesson exited ${probe.code}` };
+  try {
+    const parsed = JSON.parse(String(probe.stdout || "{}"));
+    if (parsed?.ok !== true || parsed?.deleted !== true) return { ok: false, deleted: false, ...parsed };
+    return { ...parsed, ok: true, deleted: true };
+  } catch (err) {
+    return { ok: false, deleted: false, error: err?.message || String(err), stdout: String(probe.stdout || "").slice(0, 1200) };
   }
 }

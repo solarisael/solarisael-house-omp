@@ -10,7 +10,7 @@ import {
   statePathForRoom,
   writeActiveSpiritSnapshot,
 } from "./room.ts";
-import { catchBoat, runCodingLessons, writeLessonStore, writeSessionMemory } from "./substrate.ts";
+import { catchBoat, deleteLesson, runCodingLessons, writeLessonStore, writeSessionMemory } from "./substrate.ts";
 import { REMEMBER_STORES, buildStoreArgs } from "./stores.ts";
 import { dispatchWorker, laneStatus } from "./routing.ts";
 
@@ -117,6 +117,37 @@ export function registerSolarisaelTools(pi) {
       if (!built.ok) return refuse(built.error);
       const result = await writeLessonStore({ sharedRoot, store, title: params.title, body: params.body, extraArgs: built.args });
       return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+    },
+  });
+
+  pi.registerTool({
+    name: "delete_lesson",
+    label: "Solarisael Delete Lesson (Destructive)",
+    description: [
+      "Permanently delete exactly one coding or project lesson by numeric ID.",
+      "REQUIRES the exact current expected title; a mismatch or unknown ID refuses without deleting.",
+      "This is destructive and requires write approval. Never use it for broad cleanup.",
+    ].join("\n"),
+    parameters: z.object({
+      kind: z.enum(["coding-lesson", "project-lesson"]).describe("Which allowlisted lesson table: coding-lesson or project-lesson."),
+      id: z.string().describe("Exact positive numeric lesson ID (digits only)."),
+      expectedTitle: z.string().describe("Exact current title required as a deletion guard (must be non-empty)."),
+    }),
+    approval: "write",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const { sharedRoot, effectiveRoomDir } = roomContext(ctx.cwd);
+      const result = await deleteLesson({
+        sharedRoot,
+        effectiveRoomDir,
+        kind: params.kind,
+        id: params.id,
+        expectedTitle: params.expectedTitle,
+      });
+      return {
+        isError: !result.ok,
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: result,
+      };
     },
   });
 
