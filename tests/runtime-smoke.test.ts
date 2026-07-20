@@ -90,7 +90,12 @@ async function withForcedJsonRecall(fn: () => Promise<void>) {
 
 
 afterEach(async () => {
-  await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(tempRoots.splice(0).map((root) => rm(root, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 50,
+  })));
 });
 
 function makeSchema(kind: Schema["kind"]): Schema {

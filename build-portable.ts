@@ -9,6 +9,7 @@ const projectsRoot = path.dirname(adapterRoot);
 const coreRoot = process.env.SOLARISAEL_HOUSE_CORE
   ? path.resolve(process.env.SOLARISAEL_HOUSE_CORE)
   : path.join(projectsRoot, "solarisael-house");
+
 const outputPath = path.resolve(process.argv[2] || path.join(adapterRoot, "dist", "solarisael-house-portable.zip"));
 
 const setup = `Solarisael House — AI-guided OMP bundle
@@ -67,6 +68,7 @@ try {
   for (const filename of ["index.ts", "hygiene.ts", "package.json", "README.md", "LICENSE", "NOTICE"]) {
     await cp(path.join(adapterRoot, filename), path.join(stagingRoot, "solarisael-house-omp", filename));
   }
+
 
   for (const filename of ["README.md", "INSTALL.md", "USAGE.md", "IDENTITY_GUIDE.md", "LICENSE", "NOTICE"]) {
     await cp(path.join(coreRoot, filename), path.join(stagingRoot, filename));

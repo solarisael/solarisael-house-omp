@@ -17,12 +17,13 @@ Start with the canonical House documentation:
 - automatic and agent-initiated recall through the canonical House core
 - a hygiene extension for keeping host-generated context out of user-authored continuity
 - a private-data-free portable bundle, fictional starter room, and deterministic installation verifier
+- explicit Base, Full, and configured-but-degraded status for the optional [public substrate](https://github.com/solarisael/solarisael-house-substrate)
 
-The adapter fails open: unavailable database or embedding services reduce recall rather than making the Base House unusable.
+The adapter fails open: an absent substrate is valid Base House, while a configured but unhealthy database or embedder is reported as degraded rather than mistaken for healthy Full House.
 
 ## Platform expectations
 
-The current guided portable release targets **Windows with OMP and Bun**. The Base House does not require PostgreSQL or a GPU. The optional full substrate currently runs through WSL; see the canonical [installation protocol](https://github.com/solarisael/solarisael-house/blob/main/INSTALL.md).
+The current guided portable release targets **Windows with OMP and Bun**. The Base House does not require PostgreSQL or a GPU. The optional Full House backend runs through WSL and is installed from the canonical [`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate) repository; see the House [installation protocol](https://github.com/solarisael/solarisael-house/blob/main/INSTALL.md) for the integration boundary.
 
 ## Build the portable bundle
 
@@ -38,6 +39,11 @@ The private-data-free archive is written to:
 ```text
 dist/solarisael-house-portable.zip
 ```
+
+The archive remains a complete Base House bundle. It does not carry a partial
+copy of the Full backend; Full operators install the canonical
+[`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate)
+repository separately.
 
 ## Test
 

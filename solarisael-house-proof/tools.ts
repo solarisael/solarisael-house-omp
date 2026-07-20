@@ -16,6 +16,7 @@ import {
   catchBoat,
   deleteLesson,
   runCodingLessons,
+  substrateHealth,
   updateLesson,
   writeAnamnesisDrawer,
   writeLessonStore,
@@ -344,9 +345,12 @@ export function registerSolarisaelTools(pi) {
     ].join("\n"),
     parameters: z.object({}),
     approval: "read",
-    async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const { sharedRoot } = roomContext(ctx?.cwd);
       const result = await laneStatus();
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+      const substrate = await substrateHealth(sharedRoot);
+      const status = { ...result, substrate };
+      return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }], details: status };
     },
   });
 

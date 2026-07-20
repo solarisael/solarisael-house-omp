@@ -239,6 +239,7 @@ describe("portable bundle builder safety", () => {
       "solarisael-house-omp/verify-install.ts",
     ]));
     expect(entries).not.toContain("verify-install.ts");
+    expect(entries.some((entry) => entry.startsWith("solarisael-house-substrate/"))).toBe(false);
   });
   test("verifies a complete generic room and reports a missing host context entrypoint", async () => {
     const root = await makeTempRoot("omp-portable-verify-");
@@ -287,6 +288,100 @@ describe("portable bundle builder safety", () => {
       ok: true,
       roomPath: room,
     });
+    expect(JSON.parse(success.stdout)).toMatchObject({
+      mode: "Base",
+      staticOk: true,
+      runtimeHealth: { state: "not-configured", ok: null },
+    });
+
+
+    const substrate = path.join(root, "substrate");
+    const contract = path.join(substrate, "compatibility.json");
+    const healthScript = path.join(substrate, "health.py");
+    await mkdir(substrate, { recursive: true });
+    await writeFile(
+      contract,
+      `${JSON.stringify({ format: 1, substrateApi: 1, coreApi: 1, adapterApi: 1, schemaVersion: 1 }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const configuredEnv = isolatedEnv(home, {
+      SOLARISAEL_HOUSE_CORE: core,
+      SOLARISAEL_SUBSTRATE: substrate,
+    });
+    const configuredArgs = [...args, "--substrate", substrate];
+    const missingHealth = await runAllowFailure(
+      process.execPath,
+      [verifyInstaller, ...configuredArgs],
+      adapterRoot,
+      configuredEnv,
+    );
+    expect(missingHealth.exitCode).not.toBe(0);
+    expect(JSON.parse(missingHealth.stdout)).toMatchObject({
+      mode: "degraded",
+      runtimeHealth: {
+        ok: false,
+        state: "unhealthy",
+        verdict: { configured: true, mode: "degraded" },
+      },
+    });
+
+    await writeFile(
+      healthScript,
+      `print(${JSON.stringify(JSON.stringify({ ok: true, mode: "full", substrateApi: 1, degradedReasons: [] }))})\n`,
+      "utf8",
+    );
+    const full = await runAllowFailure(process.execPath, [verifyInstaller, ...configuredArgs], adapterRoot, configuredEnv);
+    expect(full.exitCode).toBe(0);
+    expect(JSON.parse(full.stdout)).toMatchObject({
+      ok: true,
+      mode: "Full",
+      compatibility: { ok: true },
+      runtimeHealth: { ok: true, state: "healthy", verdict: { mode: "full" } },
+    });
+
+    for (const api of ["substrateApi", "coreApi", "adapterApi"]) {
+      await writeFile(
+        contract,
+        `${JSON.stringify({ format: 1, substrateApi: 1, coreApi: 1, adapterApi: 1, [api]: 2 }, null, 2)}\n`,
+        "utf8",
+      );
+      const mismatch = await runAllowFailure(process.execPath, [verifyInstaller, ...configuredArgs], adapterRoot, configuredEnv);
+      const mismatchResult = JSON.parse(mismatch.stdout);
+      expect(mismatch.exitCode).not.toBe(0);
+      expect(mismatchResult.mode).toBe("degraded");
+      expect(mismatchResult.checks).toContainEqual(expect.objectContaining({
+        name: `${api === "substrateApi" ? "substrate" : api === "coreApi" ? "core" : "adapter"} API compatibility`,
+        ok: false,
+      }));
+    }
+
+    await rm(contract, { force: true });
+    const missingContract = await runAllowFailure(process.execPath, [verifyInstaller, ...configuredArgs], adapterRoot, configuredEnv);
+    expect(missingContract.exitCode).not.toBe(0);
+    expect(JSON.parse(missingContract.stdout).mode).toBe("degraded");
+
+    await writeFile(
+      contract,
+      `${JSON.stringify({ format: 1, substrateApi: 1, coreApi: 1, adapterApi: 1, schemaVersion: 1 }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      healthScript,
+      `print(${JSON.stringify(JSON.stringify({ ok: false, mode: "degraded", substrateApi: 1, degradedReasons: ["database unavailable"] }))})\n`,
+      "utf8",
+    );
+    const unhealthy = await runAllowFailure(process.execPath, [verifyInstaller, ...configuredArgs], adapterRoot, configuredEnv);
+    expect(unhealthy.exitCode).not.toBe(0);
+    expect(JSON.parse(unhealthy.stdout)).toMatchObject({
+      mode: "degraded",
+      runtimeHealth: {
+        ok: false,
+        state: "unhealthy",
+        verdict: { degradedReasons: ["database unavailable"] },
+      },
+    });
+
 
     await rm(agentsPath, { force: true });
     const failure = await runAllowFailure(process.execPath, [verifyInstaller, ...args], adapterRoot, env);

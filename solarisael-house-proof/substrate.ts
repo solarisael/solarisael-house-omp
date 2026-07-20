@@ -2,7 +2,7 @@
 // Silhouette: call the house Python scripts and return small JSON-ish results.
 
 import path from "node:path";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import {
@@ -24,8 +24,158 @@ export function substratePaths(sharedRoot) {
   const dir = process.env.SOLARISAEL_SUBSTRATE || path.join(sharedRoot, "house", "substrate");
   return {
     dir,
+    health: path.join(dir, "health.py"),
     recordMemory: path.join(dir, "record_memory.py"),
     catchBoat: path.join(dir, "catch_boat.py"),
+  };
+}
+
+function substrateDegraded({ configured, dir, reason, degradedReasons = [] }) {
+  return {
+    ok: configured ? false : null,
+    configured,
+    mode: configured ? "degraded" : "base",
+    substrateApi: null,
+    path: configured ? dir : null,
+    reason,
+    degradedReasons,
+  };
+}
+
+function errorMessage(error) {
+  return error?.message || error?.code || String(error);
+}
+
+async function pathAccessError(target) {
+  try {
+    await access(target);
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
+/**
+ * Read the canonical public substrate health verdict.
+ *
+ * The optional substrate never gates Base House behavior. A missing
+ * SOLARISAEL_SUBSTRATE is the valid Base mode; a configured path that cannot
+ * produce a healthy, compatible verdict is explicitly degraded instead.
+ */
+export async function substrateHealth(sharedRoot, timeoutMs = DIAGNOSTIC_TIMEOUT_MS) {
+  const configuredPath = String(process.env.SOLARISAEL_SUBSTRATE || "").trim();
+  if (!configuredPath) {
+    return substrateDegraded({
+      configured: false,
+      dir: null,
+      reason: "SOLARISAEL_SUBSTRATE is not configured",
+    });
+  }
+
+  const { dir, health } = substratePaths(sharedRoot);
+  const dirError = await pathAccessError(dir);
+  if (dirError) {
+    const detail = errorMessage(dirError);
+    return substrateDegraded({
+      configured: true,
+      dir,
+      reason: dirError.code === "ENOENT"
+        ? `configured substrate path is missing: ${dir}`
+        : `configured substrate path is unavailable: ${dir} (${detail})`,
+    });
+  }
+  const healthError = await pathAccessError(health);
+  if (healthError) {
+    const detail = errorMessage(healthError);
+    return substrateDegraded({
+      configured: true,
+      dir,
+      reason: healthError.code === "ENOENT"
+        ? `configured substrate health script is missing: ${health}`
+        : `configured substrate health script is unavailable: ${health} (${detail})`,
+    });
+  }
+
+  const argv = ["--cd", "~", "python3", windowsPathToWsl(health)];
+  let probe;
+  try {
+    probe = await runWslDiagnostic({ argv, stdin: "", timeoutMs });
+  } catch (error) {
+    return substrateDegraded({
+      configured: true,
+      dir,
+      reason: `health.py launch failed: ${errorMessage(error)}`,
+    });
+  }
+  if (probe.timedOut) {
+    return substrateDegraded({
+      configured: true,
+      dir,
+      reason: "health.py timed out",
+    });
+  }
+  if (probe.spawnError) {
+    return substrateDegraded({
+      configured: true,
+      dir,
+      reason: `health.py launch failed: ${probe.spawnError}`,
+    });
+  }
+
+  const raw = String(probe.stdout || "").trim();
+  let verdict;
+  try {
+    verdict = JSON.parse(raw);
+  } catch (error) {
+    return substrateDegraded({
+      configured: true,
+      dir,
+      reason: `health.py returned malformed JSON: ${errorMessage(error)}`,
+    });
+  }
+  if (!verdict || typeof verdict !== "object" || Array.isArray(verdict)) {
+    return substrateDegraded({
+      configured: true,
+      dir,
+      reason: "health.py returned an invalid JSON verdict",
+    });
+  }
+
+  const reportedReasons = Array.isArray(verdict.degradedReasons)
+    ? verdict.degradedReasons.filter((reason) => typeof reason === "string" && reason.trim())
+    : [];
+  const apiCompatible = verdict.substrateApi === 1;
+  const full = verdict.ok === true && verdict.mode === "full" && apiCompatible;
+  if (full) {
+    return {
+      ...verdict,
+      ok: true,
+      configured: true,
+      mode: "full",
+      path: dir,
+      reason: null,
+      degradedReasons: reportedReasons,
+    };
+  }
+
+  let reason = reportedReasons.join("; ");
+  if (!apiCompatible) {
+    reason = `substrate API mismatch: health.py reported ${String(verdict.substrateApi)}, expected 1`;
+  } else if (!reason && verdict.mode !== "full") {
+    reason = `health.py reported mode ${String(verdict.mode)}, expected full`;
+  } else if (!reason && verdict.ok !== true) {
+    reason = "health.py reported an unhealthy substrate";
+  } else if (!reason) {
+    reason = "health.py returned an incomplete full-mode verdict";
+  }
+  return {
+    ...verdict,
+    ok: false,
+    configured: true,
+    mode: "degraded",
+    path: dir,
+    reason,
+    degradedReasons: reportedReasons.length ? reportedReasons : [reason],
   };
 }
 
