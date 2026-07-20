@@ -15,6 +15,7 @@ import {
 } from "./solarisael-house-proof/room.ts";
 import { catchBoat, formatWakeContext } from "./solarisael-house-proof/substrate.ts";
 import { messageText } from "./solarisael-house-proof/text.ts";
+import { queryAnamnesis, formatAnamnesisContext } from "./solarisael-house-proof/anamnesis.ts";
 import { registerSolarisaelTools } from "./solarisael-house-proof/tools.ts";
 import { contextNudge, keywordReminder, processLessonsReminder } from "./solarisael-house-proof/triggers.ts";
 
@@ -108,10 +109,10 @@ export default function solarisaelHouseProof(pi) {
         timestamp,
       });
     }
-
-    const wakeKey = `${room}:${ctx.cwd || effectiveRoomDir}`;
-    if (isFreshConversation(messages) && !wokenSessions.has(wakeKey) && !existingTypes.has("solarisael-wake-context")) {
-      wokenSessions.add(wakeKey);
+    const wakeKey = `${room}:${ctx.sessionID || ctx.cwd || effectiveRoomDir}`;
+    const freshWake = isFreshConversation(messages) && !wokenSessions.has(wakeKey);
+    if (freshWake) wokenSessions.add(wakeKey);
+    if (freshWake && !existingTypes.has("solarisael-wake-context")) {
       try {
         const boat = await catchBoat(sharedRoot, room);
         if (boat?.ok && boat?.found) {
@@ -130,6 +131,27 @@ export default function solarisaelHouseProof(pi) {
         }
       } catch {
         // Auto-wake is fail-open. Manual wake remains available.
+      }
+    }
+    if (freshWake && !existingTypes.has("solarisael-anamnesis-wake")) {
+      try {
+        const result = await queryAnamnesis(effectiveRoomDir, room, { mode: "wake" });
+        if (result?.ok) {
+          const content = formatAnamnesisContext(result, { automatic: true });
+          if (content) {
+            additions.push({
+              role: "custom",
+              customType: "solarisael-anamnesis-wake",
+              content,
+              display: false,
+              details: { mode: "wake", warnings: result.warnings || [] },
+              attribution: "agent",
+              timestamp,
+            });
+          }
+        }
+      } catch {
+        // Cabinet wake is advisory and fail-open. Manual anamnesis remains available.
       }
     }
 

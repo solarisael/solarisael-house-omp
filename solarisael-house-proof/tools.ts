@@ -10,9 +10,19 @@ import {
   statePathForRoom,
   writeActiveSpiritSnapshot,
 } from "./room.ts";
-import { catchBoat, deleteLesson, runCodingLessons, writeLessonStore, writeSessionMemory } from "./substrate.ts";
-import { REMEMBER_STORES, buildStoreArgs } from "./stores.ts";
+import { queryAnamnesis, formatAnamnesisContext } from "./anamnesis.ts";
+import {
+  appendAnamnesisRep,
+  catchBoat,
+  deleteLesson,
+  runCodingLessons,
+  updateLesson,
+  writeAnamnesisDrawer,
+  writeLessonStore,
+  writeSessionMemory,
+} from "./substrate.ts";
 import { dispatchWorker, laneStatus } from "./routing.ts";
+import { REMEMBER_STORES, buildStoreArgs } from "./stores.ts";
 
 function refuseToolResult(error) {
   const result = { ok: false, error };
@@ -76,6 +86,7 @@ export function registerSolarisaelTools(pi) {
       kind: z.enum(["memory", "coding-lesson", "project-lesson", "writing-lesson", "audio-lesson"]).optional()
         .describe("Destination store. memory (default): a thing that happened. coding-lesson: a reusable code rule with a proof pattern. project-lesson: a project-wide rule (requires 'project'). writing-lesson: a prose-taste rule (register, voice, wit mechanics). audio-lesson: an audio-pipeline rule."),
       threads: z.array(z.string()).optional().describe("memory only: thread keys, 'concept / variant / variant'."),
+      supersedes: z.array(z.string()).optional().describe("memory only: positive numeric memory IDs replaced by this write; old rows remain recoverable but lose retrieval authority."),
       shape: z.string().optional().describe("lesson kinds: shape taxonomy value (e.g. process, naming, refusal)."),
       voice: z.string().optional().describe("coding/writing lessons: voice (e.g. kodo, sol-craft)."),
       scope: z.string().optional().describe("coding-lesson: scope (shared or a room name)."),
@@ -99,11 +110,22 @@ export function registerSolarisaelTools(pi) {
           return Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "";
         });
         if (lessonOnly.length > 0) return refuse(`kind 'memory' does not accept: ${lessonOnly.join(", ")} — pick a lesson kind or drop the field(s)`);
-        const result = await writeSessionMemory({ sharedRoot, room, title: params.title, body: params.body, backup: false, threads: params.threads || [] });
+        const invalidSupersedes = (params.supersedes || []).filter((memoryId) => !/^[1-9]\d*$/.test(memoryId));
+        if (invalidSupersedes.length > 0) return refuse(`supersedes accepts positive numeric memory IDs; invalid: ${invalidSupersedes.join(", ")}`);
+        const result = await writeSessionMemory({
+          sharedRoot,
+          room,
+          title: params.title,
+          body: params.body,
+          backup: false,
+          threads: params.threads || [],
+          supersedes: [...new Set(params.supersedes || [])],
+        });
         return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       }
 
       if (Array.isArray(params.threads) && params.threads.length > 0) return refuse("threads are memory-only; lesson stores do not take threads");
+      if (Array.isArray(params.supersedes) && params.supersedes.length > 0) return refuse("supersedes is memory-only; lesson stores do not supersede memory rows");
       const store = REMEMBER_STORES[kind];
       const built = buildStoreArgs(kind, store, {
         shape: params.shape,
@@ -145,6 +167,66 @@ export function registerSolarisaelTools(pi) {
       });
       return {
         isError: !result.ok,
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: result,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "update_lesson",
+    label: "Solarisael Update Lesson",
+    description: [
+      "Update exactly one coding or project lesson while preserving its ID.",
+      "REQUIRES the exact current expected title; a mismatch or unknown ID refuses without updating.",
+      "This is a guarded write and requires write approval.",
+    ].join("\n"),
+    parameters: z.object({
+      kind: z.enum(["coding-lesson", "project-lesson"]).describe("Which allowlisted lesson table."),
+      id: z.string().describe("Exact positive numeric lesson ID (digits only)."),
+      expectedTitle: z.string().describe("Exact current title required as an update guard (must be non-empty)."),
+      title: z.string().optional().describe("Replacement title."),
+      body: z.string().optional().describe("Replacement lesson body; sent through stdin."),
+      shape: z.string().optional().describe("Lesson shape taxonomy value."),
+      triggerContext: z.string().optional().describe("When the lesson should trigger."),
+      tags: z.array(z.string()).optional().describe("Replacement lesson tags."),
+      voice: z.string().optional().describe("Coding lesson voice."),
+      scope: z.string().optional().describe("Coding lesson scope."),
+      project: z.string().optional().describe("Coding/project lesson project."),
+      proofPattern: z.string().optional().describe("Coding/project lesson proof pattern."),
+      negationOf: z.string().optional().describe("Coding lesson ID this lesson negates; omit to preserve."),
+      clearNegationOf: z.boolean().optional().describe("Clear the coding lesson's negation link; mutually exclusive with negationOf."),
+    }),
+    approval: "write",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!/^[1-9]\d*$/.test(String(params.id || ""))) return refuseToolResult("id must be a positive numeric ID");
+      if (typeof params.expectedTitle !== "string" || params.expectedTitle.length === 0) {
+        return refuseToolResult("expectedTitle must be non-empty and match the current title exactly");
+      }
+      const patchFields = ["title", "body", "shape", "triggerContext", "tags", "voice", "scope", "project", "proofPattern", "negationOf", "clearNegationOf"];
+      const patch = Object.fromEntries(patchFields
+        .filter((key) => Object.prototype.hasOwnProperty.call(params, key) && params[key] !== undefined)
+        .map((key) => [key, params[key]]));
+      if (patch.clearNegationOf === true) {
+        if (patch.negationOf !== undefined) return refuseToolResult("negationOf and clearNegationOf are mutually exclusive");
+        patch.negationOf = null;
+      }
+      delete patch.clearNegationOf;
+      if (Object.keys(patch).length === 0) return refuseToolResult("at least one update field is required");
+      if (params.kind === "project-lesson" && (patch.voice !== undefined || patch.scope !== undefined || patch.negationOf !== undefined)) {
+        return refuseToolResult("project-lesson does not accept voice, scope, or negationOf");
+      }
+      const { sharedRoot, effectiveRoomDir } = roomContext(ctx.cwd);
+      const result = await updateLesson({
+        sharedRoot,
+        effectiveRoomDir,
+        kind: params.kind,
+        id: params.id,
+        expectedTitle: params.expectedTitle,
+        patch,
+      });
+      return {
+        isError: !(result.ok === true && result.updated === true),
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         details: result,
       };
@@ -396,6 +478,89 @@ export function registerSolarisaelTools(pi) {
         content: [{ type: "text", text: JSON.stringify({ path: statePathForRoom(effectiveRoomDir), modelDefault: next.modelDefault, applied }, null, 2) }],
         details: { room, ok: true, modelDefault: next.modelDefault, applied },
       };
+    },
+  });
+  pi.registerTool({
+    name: "anamnesis",
+    label: "Solarisael Anamnesis",
+    description: "Read the Anamnesis Cabinet as bounded counsel for this room.",
+    parameters: z.object({
+      mode: z.enum(["wake", "consult"]),
+      query: z.string().optional(),
+      limit: z.number().optional(),
+    }),
+    approval: "read",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const { room, effectiveRoomDir } = roomContext(ctx.cwd);
+      const mode = params.mode;
+      if (mode === "consult" && !String(params.query || "").trim()) {
+        return refuseToolResult("consult requires a non-empty query");
+      }
+      const result = await queryAnamnesis(effectiveRoomDir, room, {
+        mode,
+        ...(mode === "consult" ? { query: params.query } : {}),
+        ...(params.limit !== undefined ? { limit: params.limit } : {}),
+      });
+      const counsel = result.ok ? formatAnamnesisContext(result, { automatic: false }) : "";
+      const output = { ...result, counsel };
+      return {
+        isError: !result.ok,
+        content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+        details: { room, ...output },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "anamnesis_write",
+    label: "Solarisael Anamnesis Write",
+    description: "Write an Anamnesis Cabinet drawer or append a lived repetition; writer refusals remain final.",
+    parameters: z.object({
+      operation: z.enum(["add", "append-rep"]),
+      kind: z.enum(["pillar", "cycle"]).optional(),
+      fidelity: z.enum(["record", "raw-material"]).optional(),
+      activation: z.enum(["wake", "fork"]).optional(),
+      dormant: z.boolean().optional(),
+      title: z.string(),
+      shape: z.string().optional(),
+      ramp: z.string().optional(),
+      counsel: z.string().optional(),
+      peak: z.string().optional(),
+      beginning: z.string().optional(),
+      verifyNote: z.string().optional(),
+      canon: z.array(z.string()).optional(),
+      sourcePaths: z.array(z.string()).optional(),
+      tags: z.array(z.string()).optional(),
+      allowEmptyCycle: z.boolean().optional(),
+      seedRep: z.object({
+        number: z.number(),
+        occurredOn: z.string().optional(),
+        howItWent: z.string(),
+        portalPull: z.string(),
+        lighter: z.string(),
+      }).optional(),
+      repNumber: z.number().optional(),
+      occurredOn: z.string().optional(),
+      howItWent: z.string().optional(),
+      portalPull: z.string().optional(),
+      lighter: z.string().optional(),
+    }),
+    approval: "write",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const { room, sharedRoot } = roomContext(ctx.cwd);
+      const payload = { ...params };
+      if (params.operation === "add") {
+        if (!params.kind || !params.fidelity || !params.activation || !params.ramp) {
+          return refuseToolResult("add requires kind, fidelity, activation, and ramp");
+        }
+        const result = await writeAnamnesisDrawer({ sharedRoot, room, payload });
+        return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+      }
+      if (!Number.isInteger(params.repNumber) || !params.howItWent || !params.portalPull || !params.lighter || !Array.isArray(params.sourcePaths)) {
+        return refuseToolResult("append-rep requires integer repNumber, howItWent, portalPull, lighter, and sourcePaths");
+      }
+      const result = await appendAnamnesisRep({ sharedRoot, room, payload });
+      return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
     },
   });
 }

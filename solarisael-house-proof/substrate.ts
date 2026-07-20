@@ -2,6 +2,8 @@
 // Silhouette: call the house Python scripts and return small JSON-ish results.
 
 import path from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import {
   CODING_LESSONS_SCRIPT,
@@ -9,6 +11,7 @@ import {
   HOUSE_CORE_ROOT,
   WRITE_TIMEOUT_MS,
 } from "./constants.ts";
+
 
 export function windowsPathToWsl(value) {
   const source = String(value || "").replace(/\\/g, "/");
@@ -73,7 +76,7 @@ export function runWslDiagnostic({ argv, stdin, timeoutMs = DIAGNOSTIC_TIMEOUT_M
   });
 }
 
-export async function writeSessionMemory({ sharedRoot, room, title, body, backup, type = "session", sourcePath, threads = [], timeoutMs = WRITE_TIMEOUT_MS }) {
+export async function writeSessionMemory({ sharedRoot, room, title, body, backup, type = "session", sourcePath, threads = [], supersedes = [], timeoutMs = WRITE_TIMEOUT_MS }) {
   const { recordMemory } = substratePaths(sharedRoot);
   const resolvedSourcePath = sourcePath
     || `memory/omp_${new Date().toISOString().replace(/[:.]/g, "-")}_${String(title || "memory").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "memory"}.md`;
@@ -87,6 +90,7 @@ export async function writeSessionMemory({ sharedRoot, room, title, body, backup
     "--body-stdin",
   ];
   for (const thread of Array.isArray(threads) ? threads : []) argv.push("--thread", String(thread));
+  for (const memoryId of Array.isArray(supersedes) ? supersedes : []) argv.push("--supersedes", String(memoryId));
   if (!backup) argv.push("--no-backup");
   const probe = await runWslDiagnostic({ argv, stdin: body, timeoutMs });
   if (probe.timedOut) return { ok: false, error: "record_memory timed out" };
@@ -193,4 +197,133 @@ export async function deleteLesson({ sharedRoot, effectiveRoomDir, kind, id, exp
   } catch (err) {
     return { ok: false, deleted: false, error: err?.message || String(err), stdout: String(probe.stdout || "").slice(0, 1200) };
   }
+}
+export async function updateLesson({
+  effectiveRoomDir,
+  kind,
+  id,
+  expectedTitle,
+  patch = {},
+  timeoutMs = WRITE_TIMEOUT_MS,
+}) {
+  const patchKeys = ["title", "body", "shape", "triggerContext", "tags", "voice", "scope", "project", "proofPattern", "negationOf"];
+  if (!patchKeys.some((key) => Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== undefined)) {
+    return { ok: false, updated: false, error: "at least one update field is required" };
+  }
+  const script = path.join(HOUSE_CORE_ROOT, "src", "update-lesson.py");
+  const argv = [
+    "--cd", "~",
+    "python3", windowsPathToWsl(script),
+    "--room-dir", windowsPathToWsl(effectiveRoomDir),
+    "--kind", String(kind),
+    "--id", String(id),
+    "--expected-title", String(expectedTitle),
+  ];
+  const values = [
+    ["title", "--title"],
+    ["shape", "--shape"],
+    ["triggerContext", "--trigger-context"],
+    ["voice", "--voice"],
+    ["scope", "--scope"],
+    ["project", "--project"],
+    ["proofPattern", "--proof-pattern"],
+    ["negationOf", "--negation-of"],
+  ];
+  for (const [key, flag] of values) {
+    if (Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== null && patch[key] !== undefined) {
+      argv.push(flag, String(patch[key]));
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "negationOf") && patch.negationOf === null) {
+    argv.push("--clear-negation-of");
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "tags")) {
+    for (const tag of Array.isArray(patch.tags) ? patch.tags : []) argv.push("--tag", String(tag));
+  }
+  const hasBody = Object.prototype.hasOwnProperty.call(patch, "body");
+  if (hasBody) argv.push("--lesson-stdin");
+  const probe = await runWslDiagnostic({ argv, stdin: hasBody ? String(patch.body ?? "") : "", timeoutMs });
+  if (probe.timedOut) return { ok: false, updated: false, error: "update-lesson timed out" };
+  if (probe.spawnError) return { ok: false, updated: false, error: probe.spawnError };
+  if (probe.code !== 0) return { ok: false, updated: false, error: String(probe.stderr || "").trim() || `update-lesson exited ${probe.code}` };
+  try {
+    const parsed = JSON.parse(String(probe.stdout || "{}"));
+    if (parsed?.ok !== true || parsed?.updated !== true) return { ...parsed, ok: false, updated: false };
+    return { ...parsed, ok: true, updated: true };
+  } catch (err) {
+    return { ok: false, updated: false, error: err?.message || String(err), stdout: String(probe.stdout || "").slice(0, 1200) };
+  }
+}
+
+async function runCabinetWriter({ sharedRoot, room, payload, append = false, timeoutMs = WRITE_TIMEOUT_MS }) {
+  const { dir } = substratePaths(sharedRoot);
+  const script = path.join(dir, "record_cabinet_entry.py");
+  const temp = await mkdtemp(path.join(tmpdir(), "anamnesis-"));
+  const files = new Map();
+  try {
+    const argv = ["--cd", "~", "python3", windowsPathToWsl(script), "--room", String(room), append ? "append-rep" : "add"];
+    const add = (flag, value) => { if (value !== undefined && value !== null && String(value) !== "") argv.push(flag, String(value)); };
+    const addFile = async (key, flag, value) => {
+      if (value === undefined || value === null || String(value) === "") return;
+      const target = path.join(temp, `${key}.txt`);
+      await writeFile(target, String(value), "utf8");
+      files.set(key, target);
+      argv.push(flag, windowsPathToWsl(target));
+    };
+    if (append) {
+      add("--title", payload?.title);
+      add("--rep-number", payload?.repNumber);
+      add("--occurred-on", payload?.occurredOn);
+      await addFile("how-it-went", "--how-it-went-file", payload?.howItWent);
+      await addFile("portal-pull", "--portal-pull-file", payload?.portalPull);
+      await addFile("lighter", "--lighter-file", payload?.lighter);
+      for (const source of Array.isArray(payload?.sourcePaths) ? payload.sourcePaths : []) add("--source-path", source);
+    } else {
+      add("--kind", payload?.kind);
+      add("--fidelity", payload?.fidelity);
+      add("--activation", payload?.activation);
+      if (payload?.dormant) argv.push("--dormant");
+      add("--title", payload?.title); add("--shape", payload?.shape);
+      if (payload?.allowEmptyCycle) argv.push("--allow-empty-cycle");
+      await addFile("ramp", "--ramp-file", payload?.ramp);
+      await addFile("counsel", "--counsel-file", payload?.counsel);
+      await addFile("peak", "--peak-file", payload?.peak);
+      await addFile("beginning", "--beginning-file", payload?.beginning);
+      await addFile("verify-note", "--verify-note-file", payload?.verifyNote);
+      for (const value of Array.isArray(payload?.canon) ? payload.canon : []) add("--canon", value);
+      for (const value of Array.isArray(payload?.sourcePaths) ? payload.sourcePaths : []) add("--source-path", value);
+      for (const value of Array.isArray(payload?.tags) ? payload.tags : []) add("--tag", value);
+      if (payload?.seedRep) {
+        add("--seed-rep-number", payload.seedRep.number);
+        add("--seed-rep-on", payload.seedRep.occurredOn);
+        await addFile("seed-rep-how", "--seed-rep-how-file", payload.seedRep.howItWent);
+        await addFile("seed-rep-portal", "--seed-rep-portal-file", payload.seedRep.portalPull);
+        await addFile("seed-rep-lighter", "--seed-rep-lighter-file", payload.seedRep.lighter);
+      }
+    }
+    const probe = await runWslDiagnostic({ argv, stdin: "", timeoutMs });
+    if (probe.timedOut) return { ok: false, error: "record_cabinet_entry timed out" };
+    if (probe.spawnError) return { ok: false, error: probe.spawnError };
+    if (probe.code !== 0) return { ok: false, error: String(probe.stderr || "").trim() || `record_cabinet_entry exited ${probe.code}` };
+    const summary = String(probe.stdout || "").trim();
+    const idPattern = append ? /cabinet rep:\s*id=(\d+)/i : /cabinet add:\s*id=(\d+)/i;
+    const idMatch = idPattern.exec(summary);
+    return {
+      ok: true,
+      ...(idMatch ? { id: Number(idMatch[1]) } : {}),
+      summary: summary.slice(0, 1200),
+    };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  } finally {
+    await rm(temp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+export function writeAnamnesisDrawer({ sharedRoot, room, payload, timeoutMs = WRITE_TIMEOUT_MS }) {
+  return runCabinetWriter({ sharedRoot, room, payload, timeoutMs });
+}
+
+export function appendAnamnesisRep({ sharedRoot, room, payload, timeoutMs = WRITE_TIMEOUT_MS }) {
+  return runCabinetWriter({ sharedRoot, room, payload, append: true, timeoutMs });
 }

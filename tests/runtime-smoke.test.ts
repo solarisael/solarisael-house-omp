@@ -29,7 +29,7 @@ type CapturedHook = {
 };
 
 type Schema = {
-  kind: "string" | "boolean" | "enum" | "object" | "array";
+  kind: "string" | "boolean" | "number" | "enum" | "object" | "array";
   describe(description: string): Schema;
   optional(): Schema;
   default(value: unknown): Schema;
@@ -41,6 +41,9 @@ const zodStub = {
   },
   boolean() {
     return makeSchema("boolean");
+  },
+  number() {
+    return makeSchema("number");
   },
   enum(_values: string[]) {
     return makeSchema("enum");
@@ -205,6 +208,7 @@ parser.add_argument("--title", required=True)
 parser.add_argument("--source-path", required=True)
 parser.add_argument("--body-stdin", action="store_true")
 parser.add_argument("--thread", action="append", default=[])
+parser.add_argument("--supersedes", action="append", default=[])
 parser.add_argument("--no-backup", action="store_true")
 args = parser.parse_args()
 
@@ -222,6 +226,7 @@ record = {
     "source_path": args.source_path,
     "body": sys.stdin.read() if args.body_stdin else "",
     "threads": args.thread,
+    "supersedes": args.supersedes,
     "backup": not args.no_backup,
     "no_backup": args.no_backup,
 }
@@ -267,12 +272,43 @@ else:
     "utf8",
   );
 
+  await writeFile(
+    path.join(dir, "record_cabinet_entry.py"),
+    String.raw`import json
+import sys
+from pathlib import Path
+
+argv = sys.argv[1:]
+command = "append-rep" if "append-rep" in argv else "add"
+record = {"command": command, "argv": argv, "files": {}}
+for index, argument in enumerate(argv[:-1]):
+    if argument.endswith("-file"):
+        record["files"][argument] = Path(argv[index + 1]).read_text(encoding="utf-8")
+
+calls_path = Path(__file__).resolve().parent / "cabinet_calls.jsonl"
+with calls_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+record_id = 17 if command == "add" else 18
+if command == "add":
+    print(f"cabinet add: id={record_id}")
+else:
+    print(f"cabinet rep: id={record_id}")
+`,
+    "utf8",
+  );
+
   return { dir, recordsPath: path.join(dir, "records.jsonl") };
 }
 
 async function readFakeMemoryRecords(recordsPath: string) {
   const records = await readFile(recordsPath, "utf8");
   return records.trim().split("\n").map((line) => JSON.parse(line));
+}
+
+async function readFakeCabinetCalls(dir: string) {
+  const calls = await readFile(path.join(dir, "cabinet_calls.jsonl"), "utf8");
+  return calls.trim().split("\n").map((line) => JSON.parse(line));
 }
 
 
@@ -470,6 +506,121 @@ describe("OMP safe tool execute runtime smoke", () => {
       routingMode: { enabled: true },
     });
   });
+  test("anamnesis read validates consult queries and anamnesis_write enforces operation fields", async () => {
+    const { cwd } = await makeTempKintsuCwd();
+    const { tools } = registerAdapter();
+    const ctx = { cwd };
+
+    const missingQuery = await executeTool(tools, "anamnesis", { mode: "consult" }, ctx);
+    expect(missingQuery.isError).toBe(true);
+    expect(parseToolJson(missingQuery)).toMatchObject({ ok: false, error: "consult requires a non-empty query" });
+
+    const missingAddFields = await executeTool(
+      tools,
+      "anamnesis_write",
+      { operation: "add", title: "Incomplete drawer" },
+      ctx,
+    );
+    expect(missingAddFields.isError).toBe(true);
+    expect(parseToolJson(missingAddFields).error).toContain("add requires kind, fidelity, activation, and ramp");
+
+    const missingRepFields = await executeTool(
+      tools,
+      "anamnesis_write",
+      { operation: "append-rep", title: "Drawer", sourcePaths: [] },
+      ctx,
+    );
+    expect(missingRepFields.isError).toBe(true);
+    expect(parseToolJson(missingRepFields).error).toContain("append-rep requires integer repNumber");
+  });
+
+  test("anamnesis_write round-trips drawer and repetition fields through the writer seam", async () => {
+    const { cwd } = await makeTempKintsuCwd();
+    const fakeSubstrate = await makeFakeSubstrate();
+    const envSnapshot = snapshotEnv();
+    const { tools } = registerAdapter();
+    const ctx = { cwd };
+
+    try {
+      process.env.SOLARISAEL_SUBSTRATE = fakeSubstrate.dir;
+
+      const add = await executeTool(
+        tools,
+        "anamnesis_write",
+        {
+          operation: "add",
+          kind: "cycle",
+          fidelity: "raw-material",
+          activation: "fork",
+          dormant: false,
+          title: "Writer seam cycle",
+          shape: "process",
+          ramp: "Ramp body, byte-for-byte.",
+          counsel: "Counsel body.",
+          peak: "Peak body.",
+          beginning: "Beginning body.",
+          verifyNote: "Verify this before acting.",
+          canon: ["canon/a", "canon/b"],
+          sourcePaths: ["memory/a.md", "memory/b.md"],
+          tags: ["writer", "seam"],
+          seedRep: {
+            number: 1,
+            occurredOn: "2026-07-16",
+            howItWent: "The first repetition landed.",
+            portalPull: "The old portal pulled.",
+            lighter: "The next pass is lighter.",
+          },
+        },
+        ctx,
+      );
+      expect(add.isError).toBe(false);
+      expect(parseToolJson(add)).toMatchObject({ ok: true, id: 17 });
+
+      const append = await executeTool(
+        tools,
+        "anamnesis_write",
+        {
+          operation: "append-rep",
+          title: "Writer seam cycle",
+          repNumber: 2,
+          occurredOn: "2026-07-17",
+          howItWent: "The second repetition landed.",
+          portalPull: "The portal still pulled.",
+          lighter: "The path shortened.",
+          sourcePaths: ["memory/c.md"],
+        },
+        ctx,
+      );
+      expect(append.isError).toBe(false);
+      expect(parseToolJson(append)).toMatchObject({ ok: true, id: 18 });
+
+      const calls = await readFakeCabinetCalls(fakeSubstrate.dir);
+      expect(calls).toHaveLength(2);
+      expect(calls[0].command).toBe("add");
+      expect(calls[0].argv).not.toContain("--dormant");
+      expect(calls[0].argv).toContain("--seed-rep-number");
+      expect(calls[0].files).toMatchObject({
+        "--ramp-file": "Ramp body, byte-for-byte.",
+        "--counsel-file": "Counsel body.",
+        "--peak-file": "Peak body.",
+        "--beginning-file": "Beginning body.",
+        "--verify-note-file": "Verify this before acting.",
+        "--seed-rep-how-file": "The first repetition landed.",
+        "--seed-rep-portal-file": "The old portal pulled.",
+        "--seed-rep-lighter-file": "The next pass is lighter.",
+      });
+      expect(calls[1].command).toBe("append-rep");
+      expect(calls[1].argv).toContain("--rep-number");
+      expect(calls[1].files).toMatchObject({
+        "--how-it-went-file": "The second repetition landed.",
+        "--portal-pull-file": "The portal still pulled.",
+        "--lighter-file": "The path shortened.",
+      });
+    } finally {
+      restoreEnv(envSnapshot);
+      await rm(fakeSubstrate.dir, { recursive: true, force: true });
+    }
+  });
 
   test("accepts a generic embodied spirit string and refreshes the marker-backed room snapshot", async () => {
     const { cwd } = await makeTempMarkedRoom();
@@ -544,6 +695,7 @@ describe("OMP safe tool execute runtime smoke", () => {
         {
           title: "Substrate seam memory",
           body: "Remember body delivered on stdin.",
+          supersedes: ["41", "42", "41"],
         },
         ctx,
       );
@@ -560,6 +712,7 @@ describe("OMP safe tool execute runtime smoke", () => {
         title: "Substrate seam memory",
         body: "Remember body delivered on stdin.",
         threads: [],
+        supersedes: ["41", "42"],
         backup: false,
         no_backup: true,
       });
@@ -604,6 +757,38 @@ describe("OMP safe tool execute runtime smoke", () => {
       restoreEnv(envSnapshot);
       await rm(fakeSubstrate.dir, { recursive: true, force: true });
     }
+  });
+
+  test("remember rejects invalid supersession IDs and lesson-store supersession", async () => {
+    const { cwd } = await makeTempKintsuCwd();
+    const { tools } = registerAdapter();
+
+    const invalidIds = await executeTool(
+      tools,
+      "remember",
+      {
+        title: "Invalid supersession",
+        body: "This write must be refused.",
+        supersedes: ["0", "not-an-id"],
+      },
+      { cwd },
+    );
+    expect(invalidIds.isError).toBe(true);
+    expect(parseToolJson(invalidIds).error).toContain("positive numeric memory IDs");
+
+    const lessonSupersession = await executeTool(
+      tools,
+      "remember",
+      {
+        kind: "coding-lesson",
+        title: "Wrong store",
+        body: "Lesson stores must not supersede memory rows.",
+        supersedes: ["41"],
+      },
+      { cwd },
+    );
+    expect(lessonSupersession.isError).toBe(true);
+    expect(parseToolJson(lessonSupersession).error).toContain("supersedes is memory-only");
   });
 
   test("routing tools expose core lane status and return dispatch receipts without spawning workers", async () => {

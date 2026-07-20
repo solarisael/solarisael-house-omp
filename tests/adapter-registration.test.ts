@@ -6,10 +6,11 @@ type CapturedTool = {
   name: string;
   parameters: Schema;
   approval?: string;
+  execute?: (...args: unknown[]) => Promise<{ details?: unknown }>;
 };
 
 type Schema = {
-  kind: "string" | "boolean" | "enum" | "object" | "array";
+  kind: "string" | "boolean" | "number" | "enum" | "object" | "array";
   isOptional?: boolean;
   values?: string[];
   shape?: Record<string, Schema>;
@@ -22,6 +23,7 @@ type Schema = {
 type SchemaSummary =
   | { type: "string"; optional?: true }
   | { type: "boolean"; optional?: true }
+  | { type: "number"; optional?: true }
   | { type: "enum"; values: string[]; optional?: true }
   | { type: "array"; element: SchemaSummary; optional?: true }
   | { type: "object"; fields: Record<string, SchemaSummary>; optional?: true };
@@ -56,6 +58,9 @@ const zodStub = {
   object(shape: Record<string, Schema>) {
     return makeSchema("object", { shape });
   },
+  number() {
+    return makeSchema("number");
+  },
   array(element: Schema) {
     return makeSchema("array", { element });
   },
@@ -69,6 +74,8 @@ function summarizeSchema(schema: Schema): SchemaSummary {
       return { type: "string", ...optional };
     case "boolean":
       return { type: "boolean", ...optional };
+    case "number":
+      return { type: "number", ...optional };
     case "enum":
       return { type: "enum", values: schema.values ?? [], ...optional };
     case "array":
@@ -102,9 +109,7 @@ function registerAdapter() {
       tools.push(tool);
     },
   };
-
   solarisaelHouseProof(pi);
-
   return { labels, hooks, tools };
 }
 
@@ -112,7 +117,10 @@ const expectedToolNames = [
   "recall",
   "remember",
   "delete_lesson",
+  "update_lesson",
   "wake",
+  "anamnesis",
+  "anamnesis_write",
   "room_state",
   "set_room_state",
   "coding_lessons",
@@ -145,7 +153,10 @@ describe("OMP adapter registration", () => {
       recall: { approval: "read" },
       remember: { approval: "write" },
       delete_lesson: { approval: "write" },
+      update_lesson: { approval: "write" },
       wake: { approval: "read" },
+      anamnesis: { approval: "read" },
+      anamnesis_write: { approval: "write" },
       room_state: { approval: "read" },
       set_room_state: { approval: "write" },
       coding_lessons: { approval: "read" },
@@ -181,6 +192,7 @@ describe("OMP adapter registration", () => {
             optional: true,
           },
           threads: { type: "array", element: { type: "string" }, optional: true },
+          supersedes: { type: "array", element: { type: "string" }, optional: true },
           shape: { type: "string", optional: true },
           voice: { type: "string", optional: true },
           scope: { type: "string", optional: true },
@@ -198,7 +210,61 @@ describe("OMP adapter registration", () => {
           expectedTitle: { type: "string" },
         },
       },
+      update_lesson: {
+        type: "object",
+        fields: {
+          kind: { type: "enum", values: ["coding-lesson", "project-lesson"] },
+          id: { type: "string" },
+          expectedTitle: { type: "string" },
+          title: { type: "string", optional: true },
+          body: { type: "string", optional: true },
+          shape: { type: "string", optional: true },
+          triggerContext: { type: "string", optional: true },
+          tags: { type: "array", element: { type: "string" }, optional: true },
+          voice: { type: "string", optional: true },
+          scope: { type: "string", optional: true },
+          project: { type: "string", optional: true },
+          proofPattern: { type: "string", optional: true },
+          negationOf: { type: "string", optional: true },
+          clearNegationOf: { type: "boolean", optional: true },
+        },
+      },
       wake: { type: "object", fields: {} },
+      anamnesis: {
+        type: "object",
+        fields: {
+          mode: { type: "enum", values: ["wake", "consult"] },
+          query: { type: "string", optional: true },
+          limit: { type: "number", optional: true },
+        },
+      },
+      anamnesis_write: {
+        type: "object",
+        fields: {
+          operation: { type: "enum", values: ["add", "append-rep"] },
+          kind: { type: "enum", values: ["pillar", "cycle"], optional: true },
+          fidelity: { type: "enum", values: ["record", "raw-material"], optional: true },
+          activation: { type: "enum", values: ["wake", "fork"], optional: true },
+          dormant: { type: "boolean", optional: true },
+          title: { type: "string" },
+          shape: { type: "string", optional: true },
+          ramp: { type: "string", optional: true },
+          counsel: { type: "string", optional: true },
+          peak: { type: "string", optional: true },
+          beginning: { type: "string", optional: true },
+          verifyNote: { type: "string", optional: true },
+          canon: { type: "array", element: { type: "string" }, optional: true },
+          sourcePaths: { type: "array", element: { type: "string" }, optional: true },
+          tags: { type: "array", element: { type: "string" }, optional: true },
+          allowEmptyCycle: { type: "boolean", optional: true },
+          seedRep: { type: "object", optional: true, fields: { number: { type: "number" }, occurredOn: { type: "string", optional: true }, howItWent: { type: "string" }, portalPull: { type: "string" }, lighter: { type: "string" } } },
+          repNumber: { type: "number", optional: true },
+          occurredOn: { type: "string", optional: true },
+          howItWent: { type: "string", optional: true },
+          portalPull: { type: "string", optional: true },
+          lighter: { type: "string", optional: true },
+        },
+      },
       room_state: { type: "object", fields: {} },
       set_room_state: {
         type: "object",
@@ -259,6 +325,24 @@ describe("OMP adapter registration", () => {
           clear: { type: "boolean", optional: true },
         },
       },
+    });
+  });
+
+  test("lesson writes reach store validation instead of an undefined registry", async () => {
+    const remember = toolMap(registerAdapter().tools).remember;
+    expect(remember.execute).toBeFunction();
+
+    const result = await remember.execute!(
+      "remember-regression",
+      { title: "Regression", body: "Regression", kind: "project-lesson" },
+      undefined,
+      undefined,
+      { cwd: process.cwd() },
+    );
+
+    expect(result.details).toEqual({
+      ok: false,
+      error: "kind 'project-lesson' requires field 'project'",
     });
   });
 });
