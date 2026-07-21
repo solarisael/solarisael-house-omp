@@ -41,7 +41,7 @@ export default function solarisaelHouseProof(pi) {
         .map((message) => message.customType),
     );
 
-    const { room, spirit, effectiveRoomDir, sharedRoot } = roomContext(ctx.cwd);
+    const { room, spirit, operator, effectiveRoomDir, sharedRoot } = roomContext(ctx.cwd);
     const timestamp = Date.now();
     const additions = [];
     let houseState = null;
@@ -84,7 +84,7 @@ export default function solarisaelHouseProof(pi) {
           "<system-reminder>",
           `Room: ${room}`,
           `Active spirit: ${houseState?.embodiedSpirit || spirit}`,
-          `Operator: ${houseState?.operator || "Sol"}`,
+          `Operator: ${houseState?.operator || operator}`,
           "Durable-memory discipline: preserve the concrete facts needed for future recognition: names, observable details, actions, boundaries, and meaning.",
           "A memory must stand alone. A transcript is provenance, not the only substance.",
           "Do not claim a memory was written without a successful remember receipt.",
@@ -163,7 +163,7 @@ export default function solarisaelHouseProof(pi) {
       }
     }
 
-    const keyword = keywordReminder(prompt);
+    const keyword = await keywordReminder(prompt);
     if (keyword && !existingTypes.has("solarisael-keyword-directive")) {
       additions.push({
         role: "custom",
@@ -294,7 +294,7 @@ export default function solarisaelHouseProof(pi) {
       }
     }
 
-    const nudge = contextNudge(messages, room);
+    const nudge = await contextNudge(messages, room);
     if (nudge && !existingTypes.has("solarisael-context-nudge")) {
       additions.push({
         role: "custom",

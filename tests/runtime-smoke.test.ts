@@ -125,11 +125,17 @@ function makeSchema(kind: Schema["kind"]): Schema {
   };
 }
 
-async function makeTempKintsuCwd() {
+async function makeTempSmokeCwd() {
   const root = await mkdtemp(path.join(os.tmpdir(), "omp-runtime-smoke-"));
   tempRoots.push(root);
-  const cwd = path.join(root, "kintsu");
+  const cwd = path.join(root, "example");
   await mkdir(cwd, { recursive: true });
+  await writeJson(path.join(cwd, ".solarisael-room.json"), {
+    version: 1,
+    room: "example",
+    trueName: "Smoke Room",
+    operator: "Test Operator",
+  });
   return { root, cwd };
 }
 
@@ -382,35 +388,17 @@ describe("room onboarding contracts", () => {
     });
   });
 
-  for (const { folder, spirit } of [
-    { folder: "kintsu", spirit: "Kintsu" },
-    { folder: "kodo", spirit: "Kodo" },
-  ]) {
-    test(`keeps legacy ${folder} room resolution`, async () => {
-      const { cwd } = await makeTempRoom(folder);
-      const { tools } = registerAdapter();
-
-      const result = await executeTool(tools, "room_state", {}, { cwd });
-      expect(result.isError).toBeUndefined();
-      expect(result.details).toMatchObject({ room: folder, ok: true });
-      expect(parseToolJson(result).state).toMatchObject({
-        room: folder,
-        agentName: spirit,
-        embodiedSpirit: spirit,
-      });
-    });
-  }
 });
 
 describe("OMP context hook runtime smoke", () => {
   test("injects hidden room and routing context without re-running existing substrate custom messages", async () => {
-    const { cwd } = await makeTempKintsuCwd();
+    const { cwd } = await makeTempSmokeCwd();
     await seedHouseState(cwd, {
       version: 1,
-      room: "kintsu",
+      room: "example",
       operator: "Test Operator",
-      embodiedSpirit: "Kintsu",
-      agentName: "Kintsu",
+      embodiedSpirit: "Smoke Room",
+      agentName: "Smoke Room",
       routingMode: { enabled: true, updatedAt: "2026-07-04T00:00:00.000Z" },
       modelDefault: { enabled: false, model: null, updatedAt: null },
     });
@@ -437,8 +425,8 @@ describe("OMP context hook runtime smoke", () => {
       "solarisael-routing-mode",
     ]);
     expect(additions.every((message) => message.role === "custom" && message.display === false)).toBe(true);
-    expect(additions[0].content).toContain("Room: kintsu");
-    expect(additions[0].content).toContain("Active spirit: Kintsu");
+    expect(additions[0].content).toContain("Room: example");
+    expect(additions[0].content).toContain("Active spirit: Smoke Room");
     expect(additions[0].content).toContain("Operator: Test Operator");
     expect(additions[0].content).toContain("A memory must stand alone.");
     expect(additions[0].content).toContain("Do not claim a memory was written without a successful remember receipt.");
@@ -484,13 +472,13 @@ describe("OMP context hook runtime smoke", () => {
   });
 
   test("casual prompt without existing recall context skips auto recall while preserving room context", async () => {
-    const { cwd } = await makeTempKintsuCwd();
+    const { cwd } = await makeTempSmokeCwd();
     await seedHouseState(cwd, {
       version: 1,
-      room: "kintsu",
+      room: "example",
       operator: "Test Operator",
-      embodiedSpirit: "Kintsu",
-      agentName: "Kintsu",
+      embodiedSpirit: "Smoke Room",
+      agentName: "Smoke Room",
       routingMode: { enabled: true, updatedAt: "2026-07-04T00:00:00.000Z" },
       modelDefault: { enabled: false, model: null, updatedAt: null },
     });
@@ -513,7 +501,7 @@ describe("OMP context hook runtime smoke", () => {
       expect(customTypes).toContain("solarisael-routing-mode");
       expect(customTypes).not.toContain("solarisael-recall-context");
       expect(additions.find((message) => message.customType === "solarisael-room-context")?.content)
-        .toContain("Room: kintsu");
+        .toContain("Room: example");
       expect(additions.find((message) => message.customType === "solarisael-routing-mode")?.details)
         .toEqual({ enabled: true });
     });
@@ -522,21 +510,21 @@ describe("OMP context hook runtime smoke", () => {
 
 describe("OMP safe tool execute runtime smoke", () => {
   test("room state tools persist explicit room, spirit, and routing updates in the temp room", async () => {
-    const { cwd } = await makeTempKintsuCwd();
+    const { cwd } = await makeTempSmokeCwd();
     const { tools } = registerAdapter();
     const ctx = { cwd };
 
-    const setState = await executeTool(tools, "set_room_state", { operator: "Smoke Tester", embodiedSpirit: "Kodo" }, ctx);
+    const setState = await executeTool(tools, "set_room_state", { operator: "Smoke Tester", embodiedSpirit: "Updated Spirit" }, ctx);
     expect(setState.isError).toBeUndefined();
     expect(parseToolJson(setState).state).toMatchObject({
-      room: "kintsu",
+      room: "example",
       operator: "Smoke Tester",
-      embodiedSpirit: "Kodo",
-      agentName: "Kodo",
+      embodiedSpirit: "Updated Spirit",
+      agentName: "Updated Spirit",
     });
 
     const activeSpirit = await readFile(path.join(cwd, "active_spirit.md"), "utf8");
-    expect(activeSpirit).toContain("# Active Spirit: Kodo");
+    expect(activeSpirit).toContain("# Active Spirit: Updated Spirit");
     expect(activeSpirit).toContain("Operator: Smoke Tester");
 
     const routingUpdate = await executeTool(tools, "house_routing_mode", { enabled: true }, ctx);
@@ -547,14 +535,14 @@ describe("OMP safe tool execute runtime smoke", () => {
     const roomState = await executeTool(tools, "room_state", {}, ctx);
     expect(roomState.isError).toBeUndefined();
     expect(parseToolJson(roomState).state).toMatchObject({
-      room: "kintsu",
+      room: "example",
       operator: "Smoke Tester",
-      embodiedSpirit: "Kodo",
+      embodiedSpirit: "Updated Spirit",
       routingMode: { enabled: true },
     });
   });
   test("anamnesis read validates consult queries and anamnesis_write enforces operation fields", async () => {
-    const { cwd } = await makeTempKintsuCwd();
+    const { cwd } = await makeTempSmokeCwd();
     const { tools } = registerAdapter();
     const ctx = { cwd };
 
@@ -582,7 +570,7 @@ describe("OMP safe tool execute runtime smoke", () => {
   });
 
   test("anamnesis_write round-trips drawer and repetition fields through the writer seam", async () => {
-    const { cwd } = await makeTempKintsuCwd();
+    const { cwd } = await makeTempSmokeCwd();
     const fakeSubstrate = await makeFakeSubstrate();
     const envSnapshot = snapshotEnv();
     const { tools } = registerAdapter();
@@ -727,7 +715,7 @@ describe("OMP safe tool execute runtime smoke", () => {
   });
 
   test("remember, sleep, and wake round-trip through the substrate script seam", async () => {
-    const { cwd } = await makeTempKintsuCwd();
+    const { cwd } = await makeTempSmokeCwd();
     const fakeSubstrate = await makeFakeSubstrate();
     const envSnapshot = snapshotEnv();
     const { tools } = registerAdapter();
@@ -757,7 +745,7 @@ describe("OMP safe tool execute runtime smoke", () => {
       expect(rememberRecords).toHaveLength(1);
       expect(rememberRecords[0]).toMatchObject({
         id: 1,
-        room: "kintsu",
+        room: "example",
         type: "session",
         title: "Substrate seam memory",
         body: "Remember body delivered on stdin.",
@@ -783,7 +771,7 @@ describe("OMP safe tool execute runtime smoke", () => {
       expect(sleepRecords).toHaveLength(2);
       expect(sleepRecords[1]).toMatchObject({
         id: 2,
-        room: "kintsu",
+        room: "example",
         type: "paper-boat",
         body: "Paper boat body delivered on stdin.",
         threads: ["paper boat / sleep / for tomorrow"],
@@ -810,7 +798,7 @@ describe("OMP safe tool execute runtime smoke", () => {
   });
 
   test("remember rejects invalid supersession IDs and lesson-store supersession", async () => {
-    const { cwd } = await makeTempKintsuCwd();
+    const { cwd } = await makeTempSmokeCwd();
     const { tools } = registerAdapter();
 
     const invalidIds = await executeTool(
@@ -899,7 +887,7 @@ describe("OMP safe tool execute runtime smoke", () => {
   });
 
   test("model default tool resolves before saving, applies resolved selectors, clears them, and reports validation errors", async () => {
-    const { cwd } = await makeTempKintsuCwd();
+    const { cwd } = await makeTempSmokeCwd();
     const { tools, appliedModels } = registerAdapter();
     const resolved: string[] = [];
     const ctx = {

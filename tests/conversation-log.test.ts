@@ -5,8 +5,14 @@ import path from "node:path";
 
 test("a reloaded adapter does not duplicate transcript or live-context turns", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "omp-conversation-dedupe-"));
-  const cwd = path.join(root, "kintsu");
+  const cwd = path.join(root, "example");
   await mkdir(cwd, { recursive: true });
+  await writeFile(path.join(cwd, ".solarisael-room.json"), `${JSON.stringify({
+    version: 1,
+    room: "example",
+    trueName: "Example Room",
+    operator: "Example Operator",
+  })}\n`, "utf8");
   await writeFile(path.join(root, "shared_current_state.md"), "# Shared state\n", "utf8");
 
   try {
@@ -26,6 +32,8 @@ test("a reloaded adapter does not duplicate transcript or live-context turns", a
     expect(transcriptName).toBeDefined();
     const transcript = await readFile(path.join(cwd, transcriptName!), "utf8");
     expect(transcript.match(/One durable turn\./g)).toHaveLength(1);
+    expect(transcript).toMatch(/## \d{2}:\d{2} — Example Operator/);
+    expect(transcript).not.toContain("— Sol");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

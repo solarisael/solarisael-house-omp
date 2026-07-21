@@ -1,8 +1,10 @@
 // Recall adapter for OMP.
 // Silhouette: ask the opencode memory module first, then diagnose/fallback through the DB script.
 
+import path from "node:path";
+
 import { loadHouseCore, loadHouseMemory } from "./core.ts";
-import { runWslDiagnostic, windowsPathToWsl } from "./substrate.ts";
+import { runWslDiagnostic, substratePaths, windowsPathToWsl } from "./substrate.ts";
 
 async function postgresSourceScript() {
   const core = await loadHouseCore();
@@ -195,6 +197,8 @@ async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
   const sourceScript = await postgresSourceScript();
   const roomDirWsl = windowsPathToWsl(effectiveRoomDir);
   const scriptWsl = windowsPathToWsl(sourceScript);
+  const { dir: substrateDir } = substratePaths(path.dirname(effectiveRoomDir));
+  const substrateDirWsl = windowsPathToWsl(substrateDir);
   const argv = [
     "--cd", "~",
     "python3",
@@ -202,6 +206,7 @@ async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
     "--room-dir", roomDirWsl,
     "--mode", "full",
     "--room", room,
+    "--substrate-dir", substrateDirWsl,
     "--semantic-top-k", "1",
     "--semantic-min-sim", "0.50",
     "--content-top-k", "1",
@@ -228,6 +233,8 @@ async function runDirectRecallFallback(effectiveRoomDir, room, query) {
   const sourceScript = await postgresSourceScript();
   const roomDirWsl = windowsPathToWsl(effectiveRoomDir);
   const scriptWsl = windowsPathToWsl(sourceScript);
+  const { dir: substrateDir } = substratePaths(path.dirname(effectiveRoomDir));
+  const substrateDirWsl = windowsPathToWsl(substrateDir);
   const argv = [
     "--cd", "~",
     "python3",
@@ -235,6 +242,7 @@ async function runDirectRecallFallback(effectiveRoomDir, room, query) {
     "--room-dir", roomDirWsl,
     "--mode", "full",
     "--room", room,
+    "--substrate-dir", substrateDirWsl,
     "--semantic-top-k", "8",
     "--semantic-min-sim", "0.50",
     "--content-top-k", "8",

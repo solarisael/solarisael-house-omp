@@ -10,6 +10,8 @@ jobs:
     steps:
       - name: Check out adapter
         uses: actions/checkout@v4
+        with:
+          path: solarisael-house-omp
       - name: Check out canonical core sibling
         uses: actions/checkout@v4
         with:
@@ -22,4 +24,7 @@ jobs:
         with:
           python-version: "3.x"
       - name: Run focused adapter contract checks
+        working-directory: solarisael-house-omp
+        env:
+          SOLARISAEL_HOUSE_CORE: ${{ github.workspace }}/solarisael-house
         run: bun test tests/adapter-contract.test.ts tests/runtime-smoke.test.ts tests/substrate-health.test.ts tests/portable-bundle.test.ts

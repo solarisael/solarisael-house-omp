@@ -1,12 +1,7 @@
 // OMP trigger adapter.
 // Silhouette: normalize OMP messages, preserve OMP-local band state, call the shared pure core.
 
-import {
-  computeContextNudge,
-  detectKeywordTriggers,
-  formatProcessLessonsBanner,
-  matchProcessShape,
-} from "../../solarisael-house/src/index.ts";
+import { loadHouseCore } from "./core.ts";
 import { conversationTurns } from "./conversation-log.ts";
 import { runCodingLessons } from "./substrate.ts";
 import { messageText } from "./text.ts";
@@ -85,7 +80,8 @@ function normalizeOmpMessages(messages) {
   });
 }
 
-export function contextNudge(messages, room) {
+export async function contextNudge(messages, room) {
+  const { computeContextNudge } = await loadHouseCore();
   const key = String(room || "room").toLowerCase();
   const lastBand = nudgeBandByRoom.get(key) || 0;
   const nudge = computeContextNudge({ messages: normalizeOmpMessages(messages), room, lastBand });
@@ -94,7 +90,8 @@ export function contextNudge(messages, room) {
   return { pct: nudge.pct, tokens: nudge.tokens, text: nudge.text };
 }
 
-export function keywordReminder(prompt) {
+export async function keywordReminder(prompt) {
+  const { detectKeywordTriggers } = await loadHouseCore();
   const fired = detectKeywordTriggers(String(prompt || ""));
   if (!fired.length) return null;
   return {
@@ -107,19 +104,19 @@ export function keywordReminder(prompt) {
 }
 
 export async function processLessonsReminder(prompt, effectiveRoomDir, room) {
+  const { matchProcessShape, formatProcessLessonsBanner } = await loadHouseCore();
   const triggerName = matchProcessShape(String(prompt || ""));
   if (!triggerName) return null;
   const result = await runCodingLessons(effectiveRoomDir, room, "process");
   if (!result.ok || !Array.isArray(result.lessons) || result.lessons.length === 0) return null;
   const banner = formatProcessLessonsBanner(result.lessons, triggerName);
-  if (!banner) return null;
   return {
     trigger: triggerName,
     lessons: result.lessons.length,
     text: [
       "<system-reminder>",
       "Solarisael process-shape lessons matched this user turn.",
-      "Use this as hidden reasoning context before advising on the matched process. Do not render this banner verbatim unless Sol asks.",
+      "Use this as hidden reasoning context before advising on the matched process. Do not render this banner verbatim unless the operator asks.",
       "",
       banner,
       "</system-reminder>",

@@ -45,7 +45,7 @@ async function writeTranscriptDebug(ctx, entry) {
 }
 
 async function appendRoomTranscriptTurn(ctx, turn) {
-  const { effectiveRoomDir, spirit } = roomContext(ctx?.cwd || process.cwd());
+  const { effectiveRoomDir, spirit, operator } = roomContext(ctx?.cwd || process.cwd());
   const stamp = localDateStamp();
   const target = path.join(effectiveRoomDir, `conversation_log_${stamp}.md`);
   const key = conversationTurnKey(ctx, turn);
@@ -69,7 +69,7 @@ async function appendRoomTranscriptTurn(ctx, turn) {
         "",
       ].join("\n");
   const separator = existing && !existing.endsWith("\n\n") ? "\n\n" : "";
-  const label = turn.role === "user" ? "Sol" : spirit;
+  const label = turn.role === "user" ? operator : spirit;
   const clock = new Date().toISOString().slice(11, 16);
   await appendFile(
     target,
@@ -80,14 +80,14 @@ async function appendRoomTranscriptTurn(ctx, turn) {
 }
 
 async function logRoomTurn(ctx, role, text, messageID) {
-  const { room, spirit, effectiveRoomDir, sharedRoot } = roomContext(ctx?.cwd || process.cwd());
+  const { room, spirit, operator, effectiveRoomDir, sharedRoot } = roomContext(ctx?.cwd || process.cwd());
   const ledger = await loadHouseLedger();
   const meta = {
     sessionID: OMP_SESSION_ID,
     messageID: messageID || `${role}-${Date.now()}`,
     agentName: spirit,
     spirit,
-    operator: "Sol",
+    operator,
   };
   const paths = { roomDir: effectiveRoomDir, sharedRoot };
   if (role === "user") return ledger.logUserTurn(meta, text, paths);
