@@ -293,6 +293,7 @@ describe("automatic recall viewport", () => {
       "Evidence kind": "Canonical evidence",
       "Title": "Orchid decision",
       "Authority state": "Authoritative canon",
+      "Lifecycle state": "Active",
       "Source / provenance": "memory/2026-07-21_orchid.md · canon + memory",
       "Human date": "July 21, 2026",
       "Excerpt": "The canonical decision stands.",
@@ -327,6 +328,7 @@ describe("automatic recall viewport", () => {
     });
     expect(automaticRecallViewport(compact).evidenceBundles[0]).toMatchObject({
       "Authority state": "historical",
+      "Lifecycle state": "Superseded by 42; Archived 2026-07-20T10:00:00.000Z",
       "Human date": "July 18, 2026",
     });
   });

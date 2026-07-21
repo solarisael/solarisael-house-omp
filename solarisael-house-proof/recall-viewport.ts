@@ -28,6 +28,7 @@ export const EVIDENCE_BUNDLE_LABELS = Object.freeze([
   "Evidence kind",
   "Title",
   "Authority state",
+  "Lifecycle state",
   "Source / provenance",
   "Human date",
   "Selection reason",
@@ -169,6 +170,20 @@ function authorityState(candidate: any, kind: string): string {
   if (kind === "Memory") return "Remembered account";
   return "Unverified retrieval";
 }
+function lifecycleState(candidate: any): string {
+  const supersededBy = text(candidate?.superseded_by || candidate?.supersededBy);
+  const archivedAt = text(candidate?.archived_at || candidate?.archivedAt);
+  const states: string[] = [];
+  if (candidate?.superseded || supersededBy) {
+    states.push(supersededBy ? `Superseded by ${supersededBy}` : "Superseded");
+  }
+  if (candidate?.archived || archivedAt) {
+    states.push(archivedAt ? `Archived ${archivedAt}` : "Archived");
+  }
+  if (states.length) return states.join("; ");
+  if (candidate?.historical) return "Historical retrieval";
+  return "Active";
+}
 
 function provenanceOf(candidate: any): string {
   const path = text(candidate?.source_path) || "Inline evidence";
@@ -304,6 +319,7 @@ function bundleFor(analysis: CandidateAnalysis, reason: string, excerpt: string)
     "Evidence kind": analysis.evidenceKind,
     "Title": text((analysis.candidate as any)?.title) || "Untitled evidence",
     "Authority state": analysis.authorityState,
+    "Lifecycle state": lifecycleState(analysis.candidate),
     "Source / provenance": analysis.provenance,
     "Human date": formatHumanDate(analysis.candidate),
     "Selection reason": reason,
