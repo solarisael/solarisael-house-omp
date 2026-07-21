@@ -30,6 +30,23 @@ describe("OMP adapter contract", () => {
     }
   });
 
+  test("rejects the reserved house room key from adapter room resolution", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "omp-adapter-reserved-room-"));
+    try {
+      const cwd = path.join(root, "example");
+      await mkdir(cwd);
+      await writeFile(
+        path.join(cwd, ".solarisael-room.json"),
+        `${JSON.stringify({ version: 1, room: "house", trueName: "Example Room", operator: "Example Operator" })}\n`,
+        "utf8",
+      );
+      expect(supportedRoom(cwd)).toBe("example");
+      expect(roomContext(cwd)).toMatchObject({ room: "example", operator: "Example Operator" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("uses a neutral operator when a marker omits one", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "omp-adapter-operator-"));
     try {

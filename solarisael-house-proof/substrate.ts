@@ -20,8 +20,27 @@ export function windowsPathToWsl(value) {
   return `/mnt/${match[1].toLowerCase()}/${match[2]}`;
 }
 
+function isAbsolutePath(value) {
+  const source = String(value || "").trim();
+  return path.posix.isAbsolute(source)
+    || path.win32.isAbsolute(source)
+    || /^[A-Za-z]:[\\/]/.test(source)
+    || /^\\\\/.test(source);
+}
+
+export function substrateConfigurationError() {
+  const configuredPath = String(process.env.SOLARISAEL_SUBSTRATE || "").trim();
+  if (!configuredPath || isAbsolutePath(configuredPath)) return null;
+  return `SOLARISAEL_SUBSTRATE must be an absolute path when configured (got ${configuredPath})`;
+}
+
+function configuredSubstratePath(sharedRoot) {
+  const configuredPath = String(process.env.SOLARISAEL_SUBSTRATE || "").trim();
+  return configuredPath || path.join(sharedRoot, "house", "substrate");
+}
+
 export function substratePaths(sharedRoot) {
-  const dir = process.env.SOLARISAEL_SUBSTRATE || path.join(sharedRoot, "house", "substrate");
+  const dir = configuredSubstratePath(sharedRoot);
   return {
     dir,
     health: path.join(dir, "health.py"),
@@ -69,6 +88,15 @@ export async function substrateHealth(sharedRoot, timeoutMs = DIAGNOSTIC_TIMEOUT
       configured: false,
       dir: null,
       reason: "SOLARISAEL_SUBSTRATE is not configured",
+    });
+  }
+  const configurationError = substrateConfigurationError();
+  if (configurationError) {
+    return substrateDegraded({
+      configured: true,
+      dir: configuredPath,
+      reason: configurationError,
+      degradedReasons: [configurationError],
     });
   }
 
@@ -227,6 +255,8 @@ export function runWslDiagnostic({ argv, stdin, timeoutMs = DIAGNOSTIC_TIMEOUT_M
 }
 
 export async function writeSessionMemory({ sharedRoot, room, title, body, backup, type = "session", sourcePath, threads = [], supersedes = [], timeoutMs = WRITE_TIMEOUT_MS }) {
+  const configurationError = substrateConfigurationError();
+  if (configurationError) return { ok: false, error: configurationError };
   const { recordMemory } = substratePaths(sharedRoot);
   const resolvedSourcePath = sourcePath
     || `memory/omp_${new Date().toISOString().replace(/[:.]/g, "-")}_${String(title || "memory").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "memory"}.md`;
@@ -256,6 +286,8 @@ export async function writeSessionMemory({ sharedRoot, room, title, body, backup
 // scalar/tag flags built by stores.buildStoreArgs. Body goes via stdin, never
 // inline argv — cross-shell-boundary payloads break inline (lesson 163).
 export async function writeLessonStore({ sharedRoot, store, title, body, extraArgs = [], timeoutMs = WRITE_TIMEOUT_MS }) {
+  const configurationError = substrateConfigurationError();
+  if (configurationError) return { ok: false, error: configurationError };
   const { dir } = substratePaths(sharedRoot);
   const script = path.join(dir, store.script);
   const argv = [
@@ -276,6 +308,8 @@ export async function writeLessonStore({ sharedRoot, store, title, body, extraAr
 }
 
 export async function catchBoat(sharedRoot, room) {
+  const configurationError = substrateConfigurationError();
+  if (configurationError) return { ok: false, error: configurationError };
   const { catchBoat: script } = substratePaths(sharedRoot);
   const argv = ["--cd", "~", "python3", windowsPathToWsl(script), "--room", room];
   const probe = await runWslDiagnostic({ argv, stdin: "" });
@@ -406,6 +440,8 @@ export async function updateLesson({
 }
 
 async function runCabinetWriter({ sharedRoot, room, payload, append = false, timeoutMs = WRITE_TIMEOUT_MS }) {
+  const configurationError = substrateConfigurationError();
+  if (configurationError) return { ok: false, error: configurationError };
   const { dir } = substratePaths(sharedRoot);
   const script = path.join(dir, "record_cabinet_entry.py");
   const temp = await mkdtemp(path.join(tmpdir(), "anamnesis-"));

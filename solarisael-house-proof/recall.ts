@@ -4,7 +4,7 @@
 import path from "node:path";
 
 import { loadHouseCore, loadHouseMemory } from "./core.ts";
-import { runWslDiagnostic, substratePaths, windowsPathToWsl } from "./substrate.ts";
+import { runWslDiagnostic, substrateConfigurationError, substratePaths, windowsPathToWsl } from "./substrate.ts";
 
 async function postgresSourceScript() {
   const core = await loadHouseCore();
@@ -230,6 +230,8 @@ async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
 }
 
 async function runDirectRecallFallback(effectiveRoomDir, room, query) {
+  const configurationError = substrateConfigurationError();
+  if (configurationError) return { ok: false, error: configurationError };
   const sourceScript = await postgresSourceScript();
   const roomDirWsl = windowsPathToWsl(effectiveRoomDir);
   const scriptWsl = windowsPathToWsl(sourceScript);
@@ -287,6 +289,18 @@ async function runDirectRecallFallback(effectiveRoomDir, room, query) {
 }
 
 export async function recallWithFallback(effectiveRoomDir, room, query) {
+  const configurationError = substrateConfigurationError();
+  if (configurationError) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        query,
+        error: configurationError,
+        fallback: { ok: false, error: configurationError },
+      },
+    };
+  }
   const memory = await loadHouseMemory();
   const result = await memory.runRecallQuery(effectiveRoomDir, room, query);
   if (result?.ok) return { ok: true, result };

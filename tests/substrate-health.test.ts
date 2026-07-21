@@ -62,6 +62,18 @@ describe("optional substrate health", () => {
     });
   });
 
+  test("rejects a relative configured substrate path before filesystem or WSL access", async () => {
+    process.env[substrateEnv] = "relative/substrate";
+    const result = await substrateHealth("C:/unused");
+    expect(result).toMatchObject({
+      ok: false,
+      configured: true,
+      mode: "degraded",
+      reason: "SOLARISAEL_SUBSTRATE must be an absolute path when configured (got relative/substrate)",
+      degradedReasons: ["SOLARISAEL_SUBSTRATE must be an absolute path when configured (got relative/substrate)"],
+    });
+  });
+
   test("reports a configured substrate path that is missing", async () => {
     const dir = path.join(os.tmpdir(), `omp-health-missing-${Date.now()}-${Math.random()}`);
     process.env[substrateEnv] = dir;

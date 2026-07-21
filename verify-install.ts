@@ -23,6 +23,20 @@ function normalized(value: string) {
   return path.resolve(value).replaceAll("\\", "/").toLowerCase();
 }
 
+function absolutePath(value: string) {
+  const source = String(value || "").trim();
+  return path.posix.isAbsolute(source)
+    || path.win32.isAbsolute(source)
+    || /^[A-Za-z]:[\\/]/.test(source)
+    || /^\\\\/.test(source);
+}
+
+function validRoomKey(value: unknown) {
+  return typeof value === "string"
+    && value !== "house"
+    && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+}
+
 function validDisplayName(value: unknown) {
   return typeof value === "string"
     && value.trim().length > 0
@@ -49,11 +63,15 @@ const coreRoot = process.env.SOLARISAEL_HOUSE_CORE
 const roomArgument = argument("--room");
 const configPath = path.resolve(argument("--config") || path.join(os.homedir(), ".omp", "agent", "config.yml"));
 const substrateArgument = argument("--substrate");
-const substrateSetting = substrateArgument || process.env.SOLARISAEL_SUBSTRATE || null;
-const substrateConfigured = Boolean(substrateSetting && substrateSetting.trim());
-const substrateRoot = substrateConfigured ? path.resolve(substrateSetting as string) : null;
+const substrateSetting = String(substrateArgument || process.env.SOLARISAEL_SUBSTRATE || "").trim() || null;
+const substrateConfigured = Boolean(substrateSetting);
+const substrateAbsolute = !substrateConfigured || absolutePath(substrateSetting as string);
+const substrateRoot = substrateConfigured && substrateAbsolute ? path.resolve(substrateSetting as string) : null;
+const substratePathError = substrateConfigured && !substrateAbsolute
+  ? `SOLARISAEL_SUBSTRATE must be an absolute path when configured (got ${substrateSetting})`
+  : null;
 const contractPath = substrateRoot ? path.join(substrateRoot, "compatibility.json") : null;
-if (substrateRoot) process.env.SOLARISAEL_SUBSTRATE = substrateRoot;
+if (substrateConfigured) process.env.SOLARISAEL_SUBSTRATE = substrateSetting as string;
 const checks: Check[] = [];
 let compatibilityContract: CompatibilityContract | null = null;
 let compatibleApis = false;
@@ -95,8 +113,8 @@ add(checks, "adapter API export", adapterApiVersion === 1, rootImportError || `e
 add(checks, "OMP hygiene extension", existsSync(path.join(adapterRoot, "hygiene.ts")), path.join(adapterRoot, "hygiene.ts"));
 
 if (substrateConfigured) {
-  add(checks, "substrate directory", existsSync(substrateRoot as string), substrateRoot as string);
-
+  add(checks, "substrate path absolute", !substratePathError, substratePathError || String(substrateRoot));
+  if (substrateRoot) add(checks, "substrate directory", existsSync(substrateRoot), substrateRoot);
   if (!contractPath || !existsSync(contractPath)) {
     add(checks, "compatibility contract JSON", false, contractPath || "missing substrate compatibility.json");
   } else {
@@ -156,7 +174,8 @@ if (!roomArgument) {
   if (marker) {
     const roomKey = String(marker.room || "");
     const folderKey = path.basename(roomDir).toLowerCase();
-    add(checks, "room key format", /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(roomKey), roomKey || "missing marker.room");
+    add(checks, "room key format", validRoomKey(roomKey), roomKey || "missing marker.room");
+    add(checks, "room key reserved", roomKey !== "house", roomKey === "house" ? "room key 'house' is reserved for the House substrate" : "room key is available");
     add(checks, "room key matches folder", roomKey === folderKey, `marker=${roomKey || "missing"}; folder=${folderKey}`);
     add(checks, "true name", validDisplayName(marker.trueName), String(marker.trueName || "missing marker.trueName"));
     add(checks, "operator", validDisplayName(marker.operator), String(marker.operator || "missing marker.operator"));

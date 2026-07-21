@@ -12,6 +12,13 @@ export function roomNameFromCwd(cwd) {
 
 const ROOM_MARKER_FILENAME = ".solarisael-room.json";
 const DEFAULT_ROOM = "default-room";
+const RESERVED_ROOM_KEY = "house";
+
+export function isValidRoomKey(value) {
+  return typeof value === "string"
+    && value !== RESERVED_ROOM_KEY
+    && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+}
 const DEFAULT_SPIRIT = "Spirit";
 const DEFAULT_OPERATOR = "Operator";
 
@@ -62,23 +69,23 @@ function isRoomDirectory(roomDir) {
     || existsSync(path.join(roomDir, "active_spirit.md"))
     || existsSync(path.join(roomDir, ".omp", "runtime", HOUSE_STATE_FILENAME));
 }
-
 export function supportedRoom(cwd) {
   if (!isRoomDirectory(cwd)) return DEFAULT_ROOM;
   const marker = readRoomMarker(cwd);
-  return typeof marker.room === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(marker.room)
-    ? marker.room
-    : roomNameFromCwd(cwd);
+  const markerRoom = isValidRoomKey(marker.room) ? marker.room : null;
+  const folderRoom = roomNameFromCwd(cwd);
+  return markerRoom || (isValidRoomKey(folderRoom) ? folderRoom : DEFAULT_ROOM);
 }
 
 export function roomContext(cwd) {
   const requestedDir = path.resolve(String(cwd || process.cwd()));
   const recognized = isRoomDirectory(requestedDir);
   const marker = readRoomMarker(requestedDir);
-  const markedRoom = typeof marker.room === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(marker.room)
-    ? marker.room
-    : null;
-  const room = recognized ? markedRoom || roomNameFromCwd(requestedDir) : DEFAULT_ROOM;
+  const markedRoom = isValidRoomKey(marker.room) ? marker.room : null;
+  const folderRoom = roomNameFromCwd(requestedDir);
+  const room = recognized
+    ? markedRoom || (isValidRoomKey(folderRoom) ? folderRoom : DEFAULT_ROOM)
+    : DEFAULT_ROOM;
   const effectiveRoomDir = recognized
     ? requestedDir
     : path.join(OBSIDIAN_ROOT, DEFAULT_ROOM);
