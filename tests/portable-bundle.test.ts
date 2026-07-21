@@ -65,6 +65,7 @@ function isolatedEnv(home: string, overrides: Record<string, string | undefined>
     HOMEPATH: relativeHome ? `\\${relativeHome}` : "\\",
     TEMP: path.join(home, "temp"),
     TMP: path.join(home, "temp"),
+    SOLARISAEL_TEST_NATIVE_PYTHON: process.env.SOLARISAEL_TEST_NATIVE_PYTHON,
     ...overrides,
   };
 }
