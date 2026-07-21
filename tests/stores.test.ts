@@ -29,7 +29,7 @@ describe("buildStoreArgs", () => {
   test("builds argv with repeated tag flags for accepted coding lesson fields", () => {
     const result = buildStoreArgs("coding-lesson", REMEMBER_STORES["coding-lesson"], {
       shape: "process",
-      voice: "Kodo",
+      voice: "example-craft",
       proofPattern: "pin observable behavior",
       tags: ["routing", "recall"],
     });
@@ -40,7 +40,7 @@ describe("buildStoreArgs", () => {
         "--shape",
         "process",
         "--voice",
-        "Kodo",
+        "example-craft",
         "--proof-pattern",
         "pin observable behavior",
         "--tag",
@@ -78,7 +78,7 @@ describe("buildStoreArgs", () => {
   test("treats empty optional strings and arrays as absent", () => {
     const result = buildStoreArgs("coding-lesson", REMEMBER_STORES["coding-lesson"], {
       shape: "",
-      voice: "Kodo",
+      voice: "example-craft",
       tags: [],
       triggerContext: null,
       scope: undefined,
@@ -86,7 +86,7 @@ describe("buildStoreArgs", () => {
 
     expect(result).toEqual({
       ok: true,
-      args: ["--voice", "Kodo"],
+      args: ["--voice", "example-craft"],
     });
   });
 });

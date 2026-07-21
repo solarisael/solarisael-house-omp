@@ -26,8 +26,8 @@ export function isScratchName(p: string): boolean {
   return false;
 }
 
-// Sol's safety ask: a tree counts as "tracked" if it carries .git, .omp, OR
-// .opencode (our strata grew up on opencode) — plus the Obsidian vault root.
+// Safety rule: a tree counts as "tracked" if it carries .git, .omp, OR
+// .opencode (the adapter supports all three markers) — plus the Obsidian vault root.
 // markerExists is injectable so the logic stays unit-testable without disk.
 const TRACKED_MARKERS = [".git", ".omp", ".opencode"];
 const VAULT_ROOT = process.env.SOLARISAEL_VAULT_ROOT || path.join(os.homedir(), "Solarisael");

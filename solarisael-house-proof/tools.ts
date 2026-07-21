@@ -89,7 +89,7 @@ export function registerSolarisaelTools(pi) {
       threads: z.array(z.string()).optional().describe("memory only: thread keys, 'concept / variant / variant'."),
       supersedes: z.array(z.string()).optional().describe("memory only: positive numeric memory IDs replaced by this write; old rows remain recoverable but lose retrieval authority."),
       shape: z.string().optional().describe("lesson kinds: shape taxonomy value (e.g. process, naming, refusal)."),
-      voice: z.string().optional().describe("coding/writing lessons: voice (e.g. kodo, sol-craft)."),
+      voice: z.string().optional().describe("coding/writing lessons: voice (e.g. craft, room-style)."),
       scope: z.string().optional().describe("coding-lesson: scope (shared or a room name)."),
       project: z.string().optional().describe("project-lesson (required) or coding-lesson: project name."),
       proofPattern: z.string().optional().describe("coding/project lessons: the proof pattern."),

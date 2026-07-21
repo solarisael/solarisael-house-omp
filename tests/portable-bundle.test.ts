@@ -87,7 +87,7 @@ import { isInTrackedTree } from ${JSON.stringify(hygieneModule)};
 console.log(JSON.stringify({
   houseCoreRoot: HOUSE_CORE_ROOT,
   obsidianRoot: OBSIDIAN_ROOT,
-  vaultPathIsTracked: isInTrackedTree(path.join(OBSIDIAN_ROOT, "kintsu", "note.tmp"), () => false),
+  vaultPathIsTracked: isInTrackedTree(path.join(OBSIDIAN_ROOT, "example-room", "note.tmp"), () => false),
 }));
 `,
     "utf8",

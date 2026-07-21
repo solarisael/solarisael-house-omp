@@ -33,7 +33,6 @@ test("a reloaded adapter does not duplicate transcript or live-context turns", a
     const transcript = await readFile(path.join(cwd, transcriptName!), "utf8");
     expect(transcript.match(/One durable turn\./g)).toHaveLength(1);
     expect(transcript).toMatch(/## \d{2}:\d{2} — Example Operator/);
-    expect(transcript).not.toContain("— Sol");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
