@@ -134,12 +134,14 @@ describe("recall compactor", () => {
         termKey: "canonical-alias-entry",
         type: "project",
         summary: "Kept because the query directly names its alias.",
+        aliases: ["Alias Gate"],
         files: [{ file: "memory/alias-entry.md", lines: [1, 4] }],
       },
       {
         termKey: "candidate-linked-entry",
         type: "memory",
         summary: "Kept because one canon file is the surfaced candidate source.",
+        aliases: ["Not Named"],
         files: [{ file: "memory/surfaced-candidate.md", lines: [8, 12] }],
       },
     ]);
