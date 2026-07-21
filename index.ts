@@ -8,6 +8,7 @@ import { compactRecall, recallWithFallback } from "./solarisael-house-proof/reca
 import { loadHouseQueryRouting } from "./solarisael-house-proof/core.ts";
 import { resolveEntities } from "./solarisael-house-proof/entity-resolution.ts";
 import { automaticRecallViewport, createRecallViewportSession } from "./solarisael-house-proof/recall-viewport.ts";
+import { recordRecallTelemetry } from "./solarisael-house-proof/recall-telemetry.ts";
 import {
   applyPromptDirectives,
   roomContext,
@@ -65,10 +66,12 @@ export default function solarisaelHouseProof(pi) {
       }
     }
 
-    try {
-      await logUnseenConversationTurns(ctx, messages, "context");
-    } catch {
-      // Live context and ledger writes are useful, but must never block context injection.
+    if (process.env.SOLARISAEL_REPLAY_MODE !== "1") {
+      try {
+        await logUnseenConversationTurns(ctx, messages, "context");
+      } catch {
+        // Live context and ledger writes are useful, but must never block context injection.
+      }
     }
 
     if (!existingTypes.has("solarisael-room-context")) {
@@ -80,6 +83,9 @@ export default function solarisaelHouseProof(pi) {
           `Room: ${room}`,
           `Active spirit: ${houseState?.embodiedSpirit || spirit}`,
           `Operator: ${houseState?.operator || "Sol"}`,
+          "Durable-memory discipline: preserve the concrete facts needed for future recognition: names, observable details, actions, boundaries, and meaning.",
+          "A memory must stand alone. A transcript is provenance, not the only substance.",
+          "Do not claim a memory was written without a successful remember receipt.",
           "This is hidden LLM context only: it must not be persisted or rendered.",
           "</system-reminder>",
         ].join("\n"),
@@ -187,14 +193,15 @@ export default function solarisaelHouseProof(pi) {
       }
     }
 
-    if (!existingTypes.has("solarisael-recall-context")) {
+    if (!existingTypes.has("solarisael-recall-context") && process.env.SOLARISAEL_DISABLE_AUTO_RECALL !== "1") {
+      let queryRoute = null;
       try {
         const { classifyRetrievalQuery } = await loadHouseQueryRouting();
         const preliminaryRoute = classifyRetrievalQuery(prompt);
         const resolution = preliminaryRoute.entityResolutionSuggested
           ? await resolveEntities({ room, roomDir: effectiveRoomDir, query: prompt })
           : { ok: true, matches: [] };
-        const queryRoute = classifyRetrievalQuery(prompt, {
+        queryRoute = classifyRetrievalQuery(prompt, {
           recognizedEntities: resolution.matches.map((match) => match.canonicalName),
         });
         if (queryRoute.shouldAutoRecall) {
@@ -240,9 +247,47 @@ export default function solarisaelHouseProof(pi) {
                 timestamp,
               });
             }
+            await recordRecallTelemetry({
+              effectiveRoomDir,
+              sessionId: ctx?.sessionID || ctx?.sessionId,
+              room,
+              prompt,
+              route: queryRoute,
+              status: automaticCompact.found ? "injected" : "empty",
+              viewport: automaticCompact,
+              viewportDiagnostics: viewport.diagnostics,
+            });
+          } else {
+            await recordRecallTelemetry({
+              effectiveRoomDir,
+              sessionId: ctx?.sessionID || ctx?.sessionId,
+              room,
+              prompt,
+              route: queryRoute,
+              status: "error",
+              error: recalled.error || "recall failed",
+            });
           }
+        } else {
+          await recordRecallTelemetry({
+            effectiveRoomDir,
+            sessionId: ctx?.sessionID || ctx?.sessionId,
+            room,
+            prompt,
+            route: queryRoute,
+            status: "skipped",
+          });
         }
-      } catch {
+      } catch (error) {
+        await recordRecallTelemetry({
+          effectiveRoomDir,
+          sessionId: ctx?.sessionID || ctx?.sessionId,
+          room,
+          prompt,
+          route: queryRoute,
+          status: "error",
+          error,
+        }).catch(() => undefined);
         // Context injection must fail open. Manual recall remains available.
       }
     }
@@ -265,6 +310,7 @@ export default function solarisaelHouseProof(pi) {
   });
 
   pi.on("agent_end", async (event, ctx) => {
+    if (process.env.SOLARISAEL_REPLAY_MODE === "1") return;
     try {
       await logUnseenConversationTurns(ctx, event?.messages || [], "agent_end");
     } catch {

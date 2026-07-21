@@ -5,9 +5,11 @@ import path from "node:path";
 
 import solarisaelHouseProof from "../index.ts";
 import { roomContext, statePathForRoom } from "../solarisael-house-proof/room.ts";
+import { recallTelemetryPath } from "../solarisael-house-proof/recall-telemetry.ts";
 
 type CapturedTool = {
   name: string;
+  description?: string;
   execute?: (
     toolCallId: string,
     params: Record<string, unknown>,
@@ -89,13 +91,23 @@ async function withForcedJsonRecall(fn: () => Promise<void>) {
 }
 
 
+async function removeTempRoot(root: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await rm(root, { recursive: true, force: true });
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(error?.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
 afterEach(async () => {
-  await Promise.all(tempRoots.splice(0).map((root) => rm(root, {
-    recursive: true,
-    force: true,
-    maxRetries: 5,
-    retryDelay: 50,
-  })));
+  await Promise.all(tempRoots.splice(0).map(removeTempRoot));
 });
 
 function makeSchema(kind: Schema["kind"]): Schema {
@@ -428,6 +440,8 @@ describe("OMP context hook runtime smoke", () => {
     expect(additions[0].content).toContain("Room: kintsu");
     expect(additions[0].content).toContain("Active spirit: Kintsu");
     expect(additions[0].content).toContain("Operator: Test Operator");
+    expect(additions[0].content).toContain("A memory must stand alone.");
+    expect(additions[0].content).toContain("Do not claim a memory was written without a successful remember receipt.");
     expect(additions[1].content).toContain("Solarisael House worker-routing mode is enabled.");
     expect(additions[1].details).toEqual({ enabled: true });
     expect(additions.map((message) => message.customType)).not.toContain("solarisael-recall-context");
@@ -439,6 +453,34 @@ describe("OMP context hook runtime smoke", () => {
       { cwd, sessionID: "runtime-smoke-context-duplicate" },
     );
     expect(duplicateResult).toBeUndefined();
+  });
+
+  test("captures opt-in turn telemetry through the production context hook", async () => {
+    const { cwd } = await makeTempRoom("telemetry");
+    await writeJson(path.join(cwd, ".solarisael-room.json"), {
+      version: 1,
+      room: "telemetry",
+      trueName: "Telemetry",
+      operator: "Test Operator",
+      recallTelemetry: true,
+    });
+    const { hooks } = registerAdapter();
+    const contextHook = hooks.find((hook) => hook.name === "context")?.handler;
+    if (!contextHook) throw new Error("Context hook was not registered");
+    const prompt = "Hi.";
+    await contextHook(
+      { messages: [{ role: "user", id: "telemetry-prompt", content: prompt }] },
+      { cwd, sessionID: "runtime-smoke-telemetry" },
+    );
+    const source = await readFile(recallTelemetryPath(cwd), "utf8");
+    expect(source).not.toContain(prompt);
+    expect(JSON.parse(source.trim())).toMatchObject({
+      schema_version: 1,
+      session_id: "runtime-smoke-telemetry",
+      room: "telemetry",
+      status: "skipped",
+      prompt_chars: prompt.length,
+    });
   });
 
   test("casual prompt without existing recall context skips auto recall while preserving room context", async () => {
@@ -690,6 +732,9 @@ describe("OMP safe tool execute runtime smoke", () => {
     const envSnapshot = snapshotEnv();
     const { tools } = registerAdapter();
     const ctx = { cwd };
+    const rememberTool = tools.remember;
+    expect(rememberTool?.description).toContain("The memory must stand alone.");
+    expect(rememberTool?.description).toContain("transcript pointer");
 
     try {
       process.env.SOLARISAEL_SUBSTRATE = fakeSubstrate.dir;

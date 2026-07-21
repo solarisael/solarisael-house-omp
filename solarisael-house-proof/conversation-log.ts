@@ -79,12 +79,12 @@ async function appendRoomTranscriptTurn(ctx, turn) {
   return { target, key, appended: true };
 }
 
-async function logRoomTurn(ctx, role, text) {
+async function logRoomTurn(ctx, role, text, messageID) {
   const { room, spirit, effectiveRoomDir, sharedRoot } = roomContext(ctx?.cwd || process.cwd());
   const ledger = await loadHouseLedger();
   const meta = {
     sessionID: OMP_SESSION_ID,
-    messageID: `${role}-${Date.now()}`,
+    messageID: messageID || `${role}-${Date.now()}`,
     agentName: spirit,
     spirit,
     operator: "Sol",
@@ -109,20 +109,24 @@ export async function logUnseenConversationTurns(ctx, messages, source = "unknow
     }
 
     let wroteAnything = false;
-    try {
-      await logRoomTurn(ctx, turn.role, turn.text);
-      wroteAnything = true;
-    } catch (err) {
-      errors.push({ key, surface: "ledger", error: err?.message || String(err) });
-    }
-
+    let shouldWriteLedger = true;
     try {
       const result = await appendRoomTranscriptTurn(ctx, turn);
       if (result.appended) appended += 1;
       else skipped += 1;
+      shouldWriteLedger = result.appended;
       wroteAnything = true;
     } catch (err) {
       errors.push({ key, surface: "transcript", error: err?.message || String(err) });
+    }
+
+    if (shouldWriteLedger) {
+      try {
+        await logRoomTurn(ctx, turn.role, turn.text, key);
+        wroteAnything = true;
+      } catch (err) {
+        errors.push({ key, surface: "ledger", error: err?.message || String(err) });
+      }
     }
 
     if (wroteAnything) loggedTurnKeys.add(key);
