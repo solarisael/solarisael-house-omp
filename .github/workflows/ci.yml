@@ -27,4 +27,5 @@ jobs:
         working-directory: solarisael-house-omp
         env:
           SOLARISAEL_HOUSE_CORE: ${{ github.workspace }}/solarisael-house
+          SOLARISAEL_TEST_NATIVE_PYTHON: "1"
         run: bun test tests/adapter-contract.test.ts tests/runtime-smoke.test.ts tests/substrate-health.test.ts tests/portable-bundle.test.ts

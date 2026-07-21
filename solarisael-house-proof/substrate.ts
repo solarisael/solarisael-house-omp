@@ -208,9 +208,43 @@ export async function substrateHealth(sharedRoot, timeoutMs = DIAGNOSTIC_TIMEOUT
 }
 
 
+function wslPathToWindows(value) {
+  const source = String(value || "");
+  const match = /^\/mnt\/([a-z])\/(.*)$/i.exec(source);
+  if (!match) return source;
+  return `${match[1].toUpperCase()}:/${match[2]}`;
+}
+
+function diagnosticInvocation(argv) {
+  if (process.env.SOLARISAEL_TEST_NATIVE_PYTHON !== "1") {
+    return { command: "wsl.exe", args: argv };
+  }
+  const pythonIndex = argv.indexOf("python3");
+  if (pythonIndex < 0 || pythonIndex === argv.length - 1) {
+    throw new Error("native Python test seam requires a python3 script invocation");
+  }
+  return {
+    command: "python",
+    args: argv.slice(pythonIndex + 1).map(wslPathToWindows),
+  };
+}
+
 export function runWslDiagnostic({ argv, stdin, timeoutMs = DIAGNOSTIC_TIMEOUT_MS }) {
   return new Promise((resolve) => {
-    const child = spawn("wsl.exe", argv, {
+    let invocation;
+    try {
+      invocation = diagnosticInvocation(argv);
+    } catch (error) {
+      resolve({
+        timedOut: false,
+        spawnError: error?.message || String(error),
+        code: null,
+        stdout: "",
+        stderr: "",
+      });
+      return;
+    }
+    const child = spawn(invocation.command, invocation.args, {
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
