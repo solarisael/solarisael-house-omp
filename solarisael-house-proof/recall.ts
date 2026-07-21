@@ -52,9 +52,10 @@ function canonTouchesCandidate(match, candidatePaths) {
   return canonFiles(match).some((file) => candidatePaths.has(file));
 }
 
-function compactRetrievalCandidates(result) {
+function compactRetrievalCandidates(result, candidateLimit = 5) {
+  const limit = Math.max(0, Math.min(24, Number.isFinite(candidateLimit) ? Math.floor(candidateLimit) : 5));
   return Array.isArray(result?.retrievalCandidates)
-    ? result.retrievalCandidates.slice(0, 5).map((candidate) => ({
+    ? result.retrievalCandidates.slice(0, limit).map((candidate) => ({
       source_path: candidate?.source_path,
       title: candidate?.title,
       heading_path: candidate?.heading_path,
@@ -89,8 +90,8 @@ function compactTaxonomy(taxonomy) {
   };
 }
 
-export function compactRecall(result, { includeTaxonomy = false } = {}) {
-  const retrievalCandidates = compactRetrievalCandidates(result);
+export function compactRecall(result, { includeTaxonomy = false, retrievalCandidateLimit = 5 } = {}) {
+  const retrievalCandidates = compactRetrievalCandidates(result, retrievalCandidateLimit);
   const candidatePaths = new Set(
     retrievalCandidates.map((candidate) => sourcePathKey(candidate?.source_path)).filter(Boolean),
   );

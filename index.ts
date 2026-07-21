@@ -207,7 +207,7 @@ export default function solarisaelHouseProof(pi) {
         if (queryRoute.shouldAutoRecall) {
           const recalled = await recallWithFallback(effectiveRoomDir, room, queryRoute.recallQuery || prompt);
           if (recalled.ok) {
-            const compact = compactRecall(recalled.result);
+            const compact = compactRecall(recalled.result, { retrievalCandidateLimit: 24 });
             const viewportKey = `${ctx?.sessionID || ctx?.sessionId || "session"}:${room}`;
             let viewportSession = recallViewportSessions.get(viewportKey);
             if (!viewportSession) {
@@ -221,12 +221,13 @@ export default function solarisaelHouseProof(pi) {
             const filteredCanonMatches = viewport.keptCandidates.length ? compact.canonMatches : [];
             const automaticCompact = {
               ...compact,
-              retrievalCandidates: viewport.keptCandidates,
+              retrievalCandidates: viewport.evidenceBundles,
               canonMatches: filteredCanonMatches,
               semanticChunks: [],
               contentChunks: [],
+              presentationDiagnostics: viewport.diagnostics,
               found: Boolean(
-                viewport.keptCandidates.length
+                viewport.evidenceBundles.length
                 || filteredCanonMatches.length
                 || compact.dateMatches?.length
               ),
