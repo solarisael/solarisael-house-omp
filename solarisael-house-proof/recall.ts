@@ -31,6 +31,23 @@ function sourcePathKey(value) {
   return text(value).replace(/\\/g, "/").replace(/^house\//i, "").toLowerCase();
 }
 
+const PRESENTATION_CANDIDATE_METADATA = [
+  "id", "identity", "candidate_id",
+  "authority_state", "authorityState", "authority",
+  "historical", "archived", "archived_at", "superseded", "superseded_by",
+  "lifecycle_state", "lifecycleState",
+  "human_date", "date", "occurred_on", "created_at", "updated_at",
+];
+
+function presentationCandidateMetadata(candidate) {
+  if (!candidate || typeof candidate !== "object") return {};
+  const metadata = {};
+  for (const field of PRESENTATION_CANDIDATE_METADATA) {
+    if (Object.prototype.hasOwnProperty.call(candidate, field)) metadata[field] = candidate[field];
+  }
+  return metadata;
+}
+
 function matchesQueryTerm(query, term) {
   const needle = text(term).toLowerCase();
   if (!needle) return false;
@@ -38,18 +55,40 @@ function matchesQueryTerm(query, term) {
 }
 
 function isDirectCanonMatch(match, query) {
-  return [match?.termKey, ...strings(match?.entry?.aliases)].some((term) => matchesQueryTerm(query, term));
+  return [match?.termKey, ...strings(match?.entry?.aliases), ...strings(match?.aliases)]
+    .some((term) => matchesQueryTerm(query, term));
+}
+
+function canonFileEntries(match) {
+  if (Array.isArray(match?.entry?.files)) return match.entry.files;
+  return Array.isArray(match?.files) ? match.files : [];
 }
 
 function canonFiles(match) {
-  return Array.isArray(match?.entry?.files)
-    ? match.entry.files.map((entry) => sourcePathKey(entry?.file)).filter(Boolean)
-    : [];
+  return canonFileEntries(match)
+    .map((entry) => sourcePathKey(typeof entry === "object" ? entry?.file : entry))
+    .filter(Boolean);
 }
 
 function canonTouchesCandidate(match, candidatePaths) {
   if (!candidatePaths.size) return false;
   return canonFiles(match).some((file) => candidatePaths.has(file));
+}
+
+export function filterCanonMatchesForCandidates(
+  matches,
+  { query = "", candidates = [], limit = 6 } = {},
+) {
+  if (!Array.isArray(matches)) return [];
+  const candidatePaths = new Set(
+    (Array.isArray(candidates) ? candidates : [])
+      .map((candidate) => sourcePathKey(candidate?.source_path))
+      .filter(Boolean),
+  );
+  const boundedLimit = Math.max(0, Math.floor(Number.isFinite(limit) ? limit : 6));
+  return matches
+    .filter((match) => isDirectCanonMatch(match, query) || canonTouchesCandidate(match, candidatePaths))
+    .slice(0, boundedLimit);
 }
 
 function compactRetrievalCandidates(result, candidateLimit = 5) {
@@ -66,6 +105,7 @@ function compactRetrievalCandidates(result, candidateLimit = 5) {
       missing_terms: strings(candidate?.missing_terms).slice(0, 8),
       reasons: strings(candidate?.reasons).slice(0, 5),
       excerpt: text(candidate?.excerpt).slice(0, 900),
+      ...presentationCandidateMetadata(candidate),
     }))
     : [];
 }
@@ -92,20 +132,19 @@ function compactTaxonomy(taxonomy) {
 
 export function compactRecall(result, { includeTaxonomy = false, retrievalCandidateLimit = 5 } = {}) {
   const retrievalCandidates = compactRetrievalCandidates(result, retrievalCandidateLimit);
-  const candidatePaths = new Set(
-    retrievalCandidates.map((candidate) => sourcePathKey(candidate?.source_path)).filter(Boolean),
-  );
-  const canonMatches = Array.isArray(result?.canonMatches)
-    ? result.canonMatches
-      .filter((match) => isDirectCanonMatch(match, result?.query) || canonTouchesCandidate(match, candidatePaths))
-      .slice(0, 6)
-      .map((m) => ({
-        termKey: m?.termKey,
-        type: m?.entry?.type,
-        summary: m?.entry?.summary,
-        files: Array.isArray(m?.entry?.files) ? m.entry.files.slice(0, 3) : [],
-      }))
-    : [];
+  const canonMatches = filterCanonMatchesForCandidates(result?.canonMatches, {
+    query: result?.query,
+    candidates: retrievalCandidates,
+  }).map((m) => {
+    const aliases = strings(m?.entry?.aliases ?? m?.aliases).slice(0, 8);
+    return {
+      termKey: m?.termKey,
+      type: m?.entry?.type ?? m?.type,
+      summary: m?.entry?.summary ?? m?.summary,
+      ...(aliases.length ? { aliases } : {}),
+      files: canonFileEntries(m).slice(0, 3),
+    };
+  });
   const includeRawChunks = retrievalCandidates.length === 0;
   const semanticChunks = includeRawChunks && Array.isArray(result?.semanticChunks)
     ? result.semanticChunks.slice(0, 5).map((c) => ({

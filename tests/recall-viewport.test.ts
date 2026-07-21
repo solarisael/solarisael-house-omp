@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compactRecall } from "../solarisael-house-proof/recall.ts";
+import { compactRecall, filterCanonMatchesForCandidates } from "../solarisael-house-proof/recall.ts";
 import {
   automaticRecallViewport,
   createRecallViewportSession,
@@ -62,6 +62,86 @@ describe("automatic recall viewport", () => {
     expect(result.diagnostics.aperture.sourceComplexity).toBeGreaterThan(3);
   });
 
+  test("does not declare exact convergence for a singleton exact candidate", () => {
+    const result = automaticRecallViewport({
+      query: "Orchid Protocol",
+      retrievalCandidates: [
+        candidate({
+          id: "exact-singleton",
+          source_path: "memory/orchid-singleton.md",
+          title: "Orchid Protocol",
+          matched_terms: ["Orchid Protocol"],
+          sources: ["entity", "memory"],
+        }),
+      ],
+    });
+
+    expect(result.diagnostics.aperture).toMatchObject({
+      exactConvergent: false,
+      bundleLimit: 1,
+      selectedBundles: 1,
+    });
+    expect(result.diagnostics.selection[0].reason).not.toContain("contracted aperture");
+  });
+
+  test("does not contract a mixed exact and non-exact convergent set", () => {
+    const result = automaticRecallViewport({
+      query: "Orchid Protocol",
+      retrievalCandidates: [
+        candidate({
+          id: "mixed-exact",
+          source_path: "memory/mixed-exact.md",
+          title: "Shared aperture outcome",
+          reasons: ["named entity"],
+        }),
+        candidate({
+          id: "mixed-non-exact",
+          source_path: "memory/mixed-non-exact.md",
+          title: "Shared aperture outcome",
+        }),
+      ],
+    });
+
+    expect(result.diagnostics.aperture).toMatchObject({
+      convergent: true,
+      exactConvergent: false,
+      bundleLimit: 2,
+      selectedBundles: 2,
+    });
+    expect(result.keptCandidates).toHaveLength(2);
+  });
+
+  test("does not contract contradictory exact candidates", () => {
+    const result = automaticRecallViewport({
+      query: "Orchid Protocol",
+      retrievalCandidates: [
+        candidate({
+          id: "exact-safe",
+          source_path: "memory/exact-safe.md",
+          title: "Orchid Protocol is safe",
+          excerpt: "Orchid Protocol is safe after verification.",
+          reasons: ["named entity"],
+        }),
+        candidate({
+          id: "exact-not-safe",
+          source_path: "memory/exact-not-safe.md",
+          title: "Orchid Protocol is not safe",
+          excerpt: "Orchid Protocol is not safe after verification.",
+          reasons: ["named entity"],
+        }),
+      ],
+    });
+
+    expect(result.diagnostics.aperture).toMatchObject({
+      contradiction: true,
+      exactConvergent: false,
+      bundleLimit: 2,
+      selectedBundles: 2,
+    });
+    expect(result.keptCandidates).toHaveLength(2);
+    expect(result.diagnostics.selection.every(({ reason }) => !reason.includes("contracted aperture"))).toBe(true);
+  });
+
   test("keeps candidates with two independent meaningful terms", () => {
     const result = automaticRecallViewport(recall([candidate({ matched_terms: ["alpha", "beta"] })]));
     expect(result.keptCandidates).toHaveLength(1);
@@ -99,17 +179,20 @@ describe("automatic recall viewport", () => {
       ...Array.from({ length: 5 }, (_, index) => candidate({
         source_path: `memory/noise-${index}.md`,
         matched_terms: ["alpha"],
+        excerpt: "x".repeat(1000),
       })),
       candidate({
         source_path: "memory/rank-six.md",
         title: "Rank six relevant memory",
         matched_terms: ["alpha", "beta"],
+        excerpt: "x".repeat(1000),
       }),
     ];
     const explicit = compactRecall(recall(rawCandidates));
     const automatic = compactRecall(recall(rawCandidates), { retrievalCandidateLimit: 24 });
 
     expect(explicit.retrievalCandidates).toHaveLength(5);
+    expect(explicit.retrievalCandidates.every((item) => item.excerpt.length === 900)).toBe(true);
     const result = automaticRecallViewport(automatic);
     expect(result.keptCandidates.map((item) => item.source_path)).toEqual(["memory/rank-six.md"]);
     expect(result.diagnostics.pool).toMatchObject({ available: 6, inspected: 6 });
@@ -215,5 +298,69 @@ describe("automatic recall viewport", () => {
       "Excerpt": "The canonical decision stands.",
     });
     expect(bundle["Selection reason"]).toContain("highest-ranked eligible evidence");
+  });
+
+  test("preserves authority, lifecycle, and date metadata through automatic compaction", () => {
+    const compact = compactRecall(recall([
+      candidate({
+        id: "historical-orchid",
+        source_path: "memory/historical-orchid.md",
+        authority_state: "historical",
+        historical: true,
+        archived: true,
+        archived_at: "2026-07-20T10:00:00.000Z",
+        superseded: true,
+        superseded_by: 42,
+        human_date: "2026-07-18",
+      }),
+    ]), { retrievalCandidateLimit: 24 });
+
+    expect(compact.retrievalCandidates[0]).toMatchObject({
+      id: "historical-orchid",
+      authority_state: "historical",
+      historical: true,
+      archived: true,
+      archived_at: "2026-07-20T10:00:00.000Z",
+      superseded: true,
+      superseded_by: 42,
+      human_date: "2026-07-18",
+    });
+    expect(automaticRecallViewport(compact).evidenceBundles[0]).toMatchObject({
+      "Authority state": "historical",
+      "Human date": "July 18, 2026",
+    });
+  });
+
+  test("keeps canon linked to selected paths or the direct query only after aperture selection", () => {
+    const compact = compactRecall({
+      query: "What does direct-canon say about Orchid Protocol?",
+      retrievalCandidates: [
+        candidate({ id: "selected", source_path: "memory/selected.md" }),
+        candidate({ id: "rejected", source_path: "memory/rejected.md" }),
+      ],
+      canonMatches: [
+        { termKey: "direct-canon", entry: { files: [{ file: "memory/unselected-direct.md" }] } },
+        { termKey: "selected-canon", entry: { files: [{ file: "house/memory/selected.md" }] } },
+        { termKey: "rejected-canon", entry: { files: [{ file: "memory/rejected.md" }] } },
+        {
+          termKey: "alias-canon",
+          entry: { aliases: ["Orchid Protocol"], files: [{ file: "memory/alias.md" }] },
+        },
+      ],
+    }, { retrievalCandidateLimit: 24 });
+    const session = createRecallViewportSession();
+    session.exposures.set("rejected", 2);
+    const viewport = automaticRecallViewport(compact, { session, saturationLimit: 2 });
+    const filtered = filterCanonMatchesForCandidates(compact.canonMatches, {
+      query: compact.query,
+      candidates: viewport.keptCandidates,
+    });
+
+    expect(viewport.keptCandidates.map((item) => item.id)).toEqual(["selected"]);
+    expect(filtered.map((match) => match.termKey)).toEqual([
+      "direct-canon",
+      "selected-canon",
+      "alias-canon",
+    ]);
   });
 });
