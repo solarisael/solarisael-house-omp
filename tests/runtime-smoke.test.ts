@@ -518,6 +518,51 @@ describe("OMP context hook runtime smoke", () => {
         .toEqual({ enabled: true });
     });
   });
+
+  test("injects adaptive evidence bundles with stable labels and presentation diagnostics", async () => {
+    const { cwd } = await makeTempKintsuCwd();
+    await seedHouseState(cwd, {
+      version: 1,
+      room: "kintsu",
+      operator: "Test Operator",
+      embodiedSpirit: "Kintsu",
+      agentName: "Kintsu",
+      routingMode: { enabled: true, updatedAt: "2026-07-04T00:00:00.000Z" },
+      modelDefault: { enabled: false, model: null, updatedAt: null },
+    });
+    await seedCasualRecallFixture(cwd);
+
+    await withForcedJsonRecall(async () => {
+      const { hooks } = registerAdapter();
+      const contextHook = hooks.find((hook) => hook.name === "context")?.handler;
+      if (!contextHook) throw new Error("Context hook was not registered");
+      const messages = [{
+        role: "user",
+        id: "adaptive-recall-injection",
+        content: "What did the casual recall sentinel say?",
+      }];
+
+      const result = await contextHook(
+        { messages },
+        { cwd, sessionID: "runtime-smoke-adaptive-recall" },
+      );
+      const additions = result?.messages.slice(messages.length) as Array<Record<string, any>>;
+      const recallMessage = additions.find((message) => message.customType === "solarisael-recall-context");
+      if (!recallMessage) throw new Error("Adaptive recall context was not injected");
+
+      expect(recallMessage.content).toContain('"Evidence kind"');
+      expect(recallMessage.content).toContain('"Authority state"');
+      expect(recallMessage.content).toContain('"Source / provenance"');
+      expect(recallMessage.content).toContain('"Human date"');
+      expect(recallMessage.content).toContain('"Selection reason"');
+      expect(recallMessage.content).toContain('"presentationDiagnostics"');
+      expect(recallMessage.details.viewport).toMatchObject({
+        pool: { available: 1, inspected: 1 },
+        aperture: { selectedBundles: 1 },
+        budget: { hardLimit: 3600 },
+      });
+    });
+  });
 });
 
 describe("OMP safe tool execute runtime smoke", () => {
