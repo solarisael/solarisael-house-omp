@@ -1,9 +1,17 @@
 // Recall adapter for OMP.
 // Silhouette: ask the opencode memory module first, then diagnose/fallback through the DB script.
 
-import { POSTGRES_SOURCE_SCRIPT } from "./constants.ts";
-import { loadHouseMemory } from "./core.ts";
+import { loadHouseCore, loadHouseMemory } from "./core.ts";
 import { runWslDiagnostic, windowsPathToWsl } from "./substrate.ts";
+
+async function postgresSourceScript() {
+  const core = await loadHouseCore();
+  const source = core.POSTGRES_MEMORY_SOURCE_SCRIPT;
+  if (typeof source !== "string" || !source.trim()) {
+    throw new Error("Solarisael House core does not export POSTGRES_MEMORY_SOURCE_SCRIPT");
+  }
+  return source;
+}
 
 function text(value) {
   if (value === null || value === undefined) return "";
@@ -184,8 +192,9 @@ export function compactRecall(result, { includeTaxonomy = false } = {}) {
 }
 
 async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
+  const sourceScript = await postgresSourceScript();
   const roomDirWsl = windowsPathToWsl(effectiveRoomDir);
-  const scriptWsl = windowsPathToWsl(POSTGRES_SOURCE_SCRIPT);
+  const scriptWsl = windowsPathToWsl(sourceScript);
   const argv = [
     "--cd", "~",
     "python3",
@@ -202,7 +211,7 @@ async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
   return {
     effectiveRoomDir,
     roomDirWsl,
-    postgresSourceScript: POSTGRES_SOURCE_SCRIPT,
+    postgresSourceScript: sourceScript,
     postgresSourceScriptWsl: scriptWsl,
     argv,
     probe: {
@@ -216,8 +225,9 @@ async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
 }
 
 async function runDirectRecallFallback(effectiveRoomDir, room, query) {
+  const sourceScript = await postgresSourceScript();
   const roomDirWsl = windowsPathToWsl(effectiveRoomDir);
-  const scriptWsl = windowsPathToWsl(POSTGRES_SOURCE_SCRIPT);
+  const scriptWsl = windowsPathToWsl(sourceScript);
   const argv = [
     "--cd", "~",
     "python3",

@@ -57,6 +57,25 @@ if (substrateRoot) process.env.SOLARISAEL_SUBSTRATE = substrateRoot;
 const checks: Check[] = [];
 let compatibilityContract: CompatibilityContract | null = null;
 let compatibleApis = false;
+let adapterApiVersion: unknown = null;
+let coreApiVersion: unknown = null;
+let rootImportError: string | null = null;
+
+try {
+  const adapterPackage = await import(pathToFileURL(path.join(adapterRoot, "index.ts")).href);
+  adapterApiVersion = adapterPackage.ADAPTER_API_VERSION;
+} catch (error) {
+  rootImportError = `adapter root import failed: ${error instanceof Error ? error.message : String(error)}`;
+}
+try {
+  const corePackage = await import(pathToFileURL(path.join(coreRoot, "index.ts")).href);
+  coreApiVersion = corePackage.CORE_API_VERSION;
+} catch (error) {
+  rootImportError = rootImportError
+    ? `${rootImportError}; core root import failed: ${error instanceof Error ? error.message : String(error)}`
+    : `core root import failed: ${error instanceof Error ? error.message : String(error)}`;
+}
+
 let runtimeHealth: {
   ok: boolean | null;
   state: string;
@@ -69,8 +88,10 @@ let runtimeHealth: {
   verdict: null,
 };
 
-add(checks, "core package", existsSync(path.join(coreRoot, "src", "memory.ts")), coreRoot);
+add(checks, "core package", existsSync(path.join(coreRoot, "index.ts")), path.join(coreRoot, "index.ts"));
+add(checks, "core API export", coreApiVersion === 1, rootImportError || `expected 1, got ${String(coreApiVersion)}`);
 add(checks, "OMP adapter entrypoint", existsSync(path.join(adapterRoot, "index.ts")), path.join(adapterRoot, "index.ts"));
+add(checks, "adapter API export", adapterApiVersion === 1, rootImportError || `expected 1, got ${String(adapterApiVersion)}`);
 add(checks, "OMP hygiene extension", existsSync(path.join(adapterRoot, "hygiene.ts")), path.join(adapterRoot, "hygiene.ts"));
 
 if (substrateConfigured) {
@@ -88,11 +109,11 @@ if (substrateConfigured) {
   }
 
   const substrateApiOk = compatibilityContract?.substrateApi === 1;
-  const coreApiOk = compatibilityContract?.coreApi === 1;
-  const adapterApiOk = compatibilityContract?.adapterApi === 1;
+  const coreApiOk = coreApiVersion === 1 && compatibilityContract?.coreApi === coreApiVersion;
+  const adapterApiOk = adapterApiVersion === 1 && compatibilityContract?.adapterApi === adapterApiVersion;
   add(checks, "substrate API compatibility", substrateApiOk, `expected 1, got ${String(compatibilityContract?.substrateApi)}`);
-  add(checks, "core API compatibility", coreApiOk, `expected 1, got ${String(compatibilityContract?.coreApi)}`);
-  add(checks, "adapter API compatibility", adapterApiOk, `expected 1, got ${String(compatibilityContract?.adapterApi)}`);
+  add(checks, "core API compatibility", coreApiOk, `expected ${String(coreApiVersion)}, got ${String(compatibilityContract?.coreApi)}`);
+  add(checks, "adapter API compatibility", adapterApiOk, `expected ${String(adapterApiVersion)}, got ${String(compatibilityContract?.adapterApi)}`);
   compatibleApis = substrateApiOk && coreApiOk && adapterApiOk;
 
   const verdict = await substrateHealth(coreRoot);

@@ -1,0 +1,25 @@
+name: OMP adapter verification
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  focused:
+    runs-on: windows-latest
+    steps:
+      - name: Check out adapter
+        uses: actions/checkout@v4
+      - name: Check out canonical core sibling
+        uses: actions/checkout@v4
+        with:
+          repository: solarisael/solarisael-house
+          path: solarisael-house
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Run focused adapter contract checks
+        run: bun test tests/adapter-contract.test.ts tests/runtime-smoke.test.ts tests/substrate-health.test.ts tests/portable-bundle.test.ts

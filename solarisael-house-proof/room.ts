@@ -11,6 +11,9 @@ export function roomNameFromCwd(cwd) {
 }
 
 const ROOM_MARKER_FILENAME = ".solarisael-room.json";
+const DEFAULT_ROOM = "default-room";
+const DEFAULT_SPIRIT = "Spirit";
+const DEFAULT_OPERATOR = "Operator";
 
 function normalizeDisplayName(value) {
   const name = String(value || "").trim();
@@ -19,11 +22,11 @@ function normalizeDisplayName(value) {
 }
 
 function roomDisplayName(room) {
-  return String(room || "kintsu")
+  return String(room || DEFAULT_ROOM)
     .split(/[-_ ]+/)
     .filter(Boolean)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
-    .join(" ") || "Kintsu";
+    .join(" ") || DEFAULT_SPIRIT;
 }
 
 function readRoomMarker(roomDir) {
@@ -35,6 +38,16 @@ function readRoomMarker(roomDir) {
   }
 }
 
+function readPersistedHouseState(roomDir) {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(roomDir, ".omp", "runtime", HOUSE_STATE_FILENAME), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+
 function readActiveSpiritName(roomDir) {
   try {
     const source = readFileSync(path.join(roomDir, "active_spirit.md"), "utf8");
@@ -45,28 +58,39 @@ function readActiveSpiritName(roomDir) {
 }
 
 function isRoomDirectory(roomDir) {
-  const room = roomNameFromCwd(roomDir);
-  return room === "kintsu"
-    || room === "kodo"
-    || existsSync(path.join(roomDir, ROOM_MARKER_FILENAME))
-    || existsSync(path.join(roomDir, "active_spirit.md"));
+  return existsSync(path.join(roomDir, ROOM_MARKER_FILENAME))
+    || existsSync(path.join(roomDir, "active_spirit.md"))
+    || existsSync(path.join(roomDir, ".omp", "runtime", HOUSE_STATE_FILENAME));
 }
 
 export function supportedRoom(cwd) {
-  return isRoomDirectory(cwd) ? roomNameFromCwd(cwd) : "kintsu";
+  if (!isRoomDirectory(cwd)) return DEFAULT_ROOM;
+  const marker = readRoomMarker(cwd);
+  return typeof marker.room === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(marker.room)
+    ? marker.room
+    : roomNameFromCwd(cwd);
 }
 
 export function roomContext(cwd) {
   const requestedDir = path.resolve(String(cwd || process.cwd()));
-  const room = supportedRoom(requestedDir);
-  const effectiveRoomDir = isRoomDirectory(requestedDir)
+  const recognized = isRoomDirectory(requestedDir);
+  const marker = readRoomMarker(requestedDir);
+  const markedRoom = typeof marker.room === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(marker.room)
+    ? marker.room
+    : null;
+  const room = recognized ? markedRoom || roomNameFromCwd(requestedDir) : DEFAULT_ROOM;
+  const effectiveRoomDir = recognized
     ? requestedDir
-    : path.join(OBSIDIAN_ROOT, room);
-  const marker = readRoomMarker(effectiveRoomDir);
+    : path.join(OBSIDIAN_ROOT, DEFAULT_ROOM);
+  const persisted = readPersistedHouseState(effectiveRoomDir);
   const spirit = normalizeDisplayName(marker.trueName)
     || readActiveSpiritName(effectiveRoomDir)
-    || roomDisplayName(room);
-  const operator = normalizeDisplayName(marker.operator) || "Sol";
+    || normalizeDisplayName(persisted.embodiedSpirit)
+    || normalizeDisplayName(persisted.agentName)
+    || DEFAULT_SPIRIT;
+  const operator = normalizeDisplayName(marker.operator)
+    || normalizeDisplayName(persisted.operator)
+    || DEFAULT_OPERATOR;
   return {
     room,
     spirit,
@@ -80,7 +104,7 @@ export function statePathForRoom(effectiveRoomDir) {
   return path.join(effectiveRoomDir, ".omp", "runtime", HOUSE_STATE_FILENAME);
 }
 
-function defaultHouseState(room, spirit, operator = "Sol") {
+function defaultHouseState(room, spirit, operator = DEFAULT_OPERATOR) {
   return {
     version: 1,
     operator,
@@ -119,11 +143,20 @@ export function normalizeSpiritName(value) {
 
 export async function loadRoomState(effectiveRoomDir, room, spirit) {
   const marker = readRoomMarker(effectiveRoomDir);
-  const operator = normalizeDisplayName(marker.operator) || "Sol";
+  const persisted = readPersistedHouseState(effectiveRoomDir);
+  const operator = normalizeDisplayName(marker.operator)
+    || normalizeDisplayName(persisted.operator)
+    || DEFAULT_OPERATOR;
   try {
     const parsed = JSON.parse(await readFile(statePathForRoom(effectiveRoomDir), "utf8"));
     const defaults = defaultHouseState(room, spirit, operator);
-    return { ...defaults, ...parsed, room, routingMode: { ...defaults.routingMode, ...(parsed.routingMode || {}) }, modelDefault: { ...defaults.modelDefault, ...(parsed.modelDefault || {}) } };
+    return {
+      ...defaults,
+      ...parsed,
+      room,
+      routingMode: { ...defaults.routingMode, ...(parsed.routingMode || {}) },
+      modelDefault: { ...defaults.modelDefault, ...(parsed.modelDefault || {}) },
+    };
   } catch {
     return defaultHouseState(room, spirit, operator);
   }
@@ -166,8 +199,8 @@ export async function applyPromptDirectives(ctx, prompt) {
 export async function writeActiveSpiritSnapshot(effectiveRoomDir, state) {
   const existing = await readFile(path.join(effectiveRoomDir, "active_spirit.md"), "utf8").catch(() => "");
   const body = existing.replace(/^# Active Spirit:[^\n]*\nAgent:[^\n]*\nEmbodied:[^\n]*\n\n/, "");
-  const spirit = state.embodiedSpirit || state.agentName || "Kintsu";
-  const operator = state.operator || "Sol";
+  const spirit = state.embodiedSpirit || state.agentName || DEFAULT_SPIRIT;
+  const operator = state.operator || DEFAULT_OPERATOR;
   const content = [
     `# Active Spirit: ${spirit}`,
     `Agent: ${state.agentName || spirit} | Operator: ${operator}`,

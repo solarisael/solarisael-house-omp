@@ -1,3 +1,5 @@
+export const ADAPTER_API_VERSION = 1;
+
 // Solarisael House — OMP adapter entrypoint.
 //
 // This file stays where OMP config expects it. The implementation is split into
