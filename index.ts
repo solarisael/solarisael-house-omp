@@ -4,7 +4,7 @@
 // shaped modules under ./solarisael-house-proof/ so this door only wires hooks.
 
 import { isFreshConversation, logUnseenConversationTurns } from "./solarisael-house-proof/conversation-log.ts";
-import { compactRecall, recallWithFallback } from "./solarisael-house-proof/recall.ts";
+import { compactRecall, filterCanonMatchesForCandidates, recallWithFallback } from "./solarisael-house-proof/recall.ts";
 import { loadHouseQueryRouting } from "./solarisael-house-proof/core.ts";
 import { resolveEntities } from "./solarisael-house-proof/entity-resolution.ts";
 import { automaticRecallViewport, createRecallViewportSession } from "./solarisael-house-proof/recall-viewport.ts";
@@ -218,7 +218,10 @@ export default function solarisaelHouseProof(pi) {
               }
             }
             const viewport = automaticRecallViewport(compact, { session: viewportSession });
-            const filteredCanonMatches = viewport.keptCandidates.length ? compact.canonMatches : [];
+            const filteredCanonMatches = filterCanonMatchesForCandidates(compact.canonMatches, {
+              query: compact.query,
+              candidates: viewport.keptCandidates,
+            });
             const automaticCompact = {
               ...compact,
               retrievalCandidates: viewport.evidenceBundles,

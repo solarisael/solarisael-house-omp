@@ -206,6 +206,20 @@ function hasContradiction(candidates: CandidateAnalysis[]): boolean {
   return false;
 }
 
+function exactCandidatesMutuallyConverge(candidates: CandidateAnalysis[]): boolean {
+  if (candidates.length < 2) return false;
+  for (let left = 0; left < candidates.length; left += 1) {
+    for (let right = left + 1; right < candidates.length; right += 1) {
+      const sharedExactSignal = [...candidates[left].exact]
+        .some((signal) => candidates[right].exact.has(signal));
+      if (!sharedExactSignal || similarity(candidates[left].claimTokens, candidates[right].claimTokens) < 0.5) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 function coverageOf(candidate: any): number | null {
   if (typeof candidate?.term_coverage === "number" && Number.isFinite(candidate.term_coverage)) return candidate.term_coverage;
   const matched = Number(candidate?.term_coverage?.matched);
@@ -235,7 +249,7 @@ function clipAtSentenceBoundary(value: unknown, allowance: number): string {
   if (allowance === 1) return "…";
   const window = source.slice(0, allowance);
   const sentence = [...window.matchAll(/[.!?](?=\s|$)/g)].at(-1);
-  if (sentence && sentence.index !== undefined && sentence.index + 1 >= Math.floor(allowance * 0.4)) {
+  if (sentence && sentence.index !== undefined) {
     return window.slice(0, sentence.index + 1).trimEnd();
   }
   const word = window.slice(0, allowance - 1).lastIndexOf(" ");
@@ -356,8 +370,12 @@ export function automaticRecallViewport<T = any>(result: any, options: RecallVie
     eligible.map((candidate) => `${candidate.claim || candidate.identity}|${candidate.authorityState}|${candidate.evidenceKind}`),
   );
   const convergent = eligible.length > 0 && convergenceStates.size <= Math.max(1, Math.floor(eligible.length / 2));
-  const hasExact = eligible.some((candidate) => candidate.exact.size > 0);
-  const exactConvergent = hasExact && convergent;
+  const exactCandidates = eligible.filter((candidate) => candidate.exact.size > 0);
+  const hasExact = exactCandidates.length > 0;
+  const exactConvergent = exactCandidates.length >= 2
+    && exactCandidates.length === eligible.length
+    && !contradiction
+    && exactCandidatesMutuallyConverge(exactCandidates);
   const coverages = eligible.map((candidate) => coverageOf(candidate.candidate)).filter((value): value is number => value !== null);
   const averageCoverage = coverages.length ? coverages.reduce((sum, value) => sum + value, 0) / coverages.length : 1;
   const ambiguous = !hasExact && eligible.length > 1 && (
@@ -373,7 +391,7 @@ export function automaticRecallViewport<T = any>(result: any, options: RecallVie
   if (authorityComplexity) bundleLimit += 1;
   if (distinctClaims > 2) bundleLimit += Math.min(2, distinctClaims - 2);
   if (sourceComplexity > 3) bundleLimit += 1;
-  if (convergent) bundleLimit = Math.max(1, bundleLimit - 1);
+  if (convergent) bundleLimit = Math.max(Math.min(2, eligible.length), bundleLimit - 1);
   if (exactConvergent) bundleLimit = 1;
   bundleLimit = Math.min(eligible.length, hardBundleLimit, bundleLimit);
 
