@@ -288,12 +288,15 @@ export function runWslDiagnostic({ argv, stdin, timeoutMs = DIAGNOSTIC_TIMEOUT_M
   });
 }
 
+export function memorySourcePath(title, now = new Date()) {
+  return `memory/omp_${now.toISOString().replace(/[:.]/g, "-")}_${String(title || "memory").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "memory"}.md`;
+}
+
 export async function writeSessionMemory({ sharedRoot, room, title, body, backup, type = "session", sourcePath, threads = [], supersedes = [], timeoutMs = WRITE_TIMEOUT_MS }) {
   const configurationError = substrateConfigurationError();
   if (configurationError) return { ok: false, error: configurationError };
   const { recordMemory } = substratePaths(sharedRoot);
-  const resolvedSourcePath = sourcePath
-    || `memory/omp_${new Date().toISOString().replace(/[:.]/g, "-")}_${String(title || "memory").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "memory"}.md`;
+  const resolvedSourcePath = sourcePath || memorySourcePath(title);
   const argv = [
     "--cd", "~",
     "python3", windowsPathToWsl(recordMemory),

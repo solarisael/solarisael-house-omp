@@ -17,13 +17,69 @@ import {
   deleteLesson,
   runCodingLessons,
   substrateHealth,
+  memorySourcePath,
   updateLesson,
   writeAnamnesisDrawer,
   writeLessonStore,
   writeSessionMemory,
 } from "./substrate.ts";
+import { RustJsonlTransport, RustTransportError } from "../rust-transport.ts";
 import { dispatchWorker, laneStatus } from "./routing.ts";
 import { REMEMBER_STORES, buildStoreArgs } from "./stores.ts";
+
+const rustRememberTransports = new Map<string, RustJsonlTransport>();
+
+function rustRememberTransport(): RustJsonlTransport | null {
+  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  if (!executable) return null;
+  let transport = rustRememberTransports.get(executable);
+  if (!transport) {
+    transport = new RustJsonlTransport({ executable });
+    rustRememberTransports.set(executable, transport);
+  }
+  return transport;
+}
+
+async function writeRustMemory({ room, title, body, threads, supersedes, signal }) {
+  const transport = rustRememberTransport();
+  if (!transport) return null;
+  const params: Record<string, unknown> = {
+    room,
+    kind: "memory",
+    title,
+    body,
+    source_path: memorySourcePath(title),
+    threads: Array.isArray(threads) ? threads : [],
+    supersedes: [...new Set((Array.isArray(supersedes) ? supersedes : []).map(String))],
+    backup: false,
+  };
+  try {
+    const receipt = await transport.request("remember", params, {
+      signal: signal || undefined,
+      settleDefinitively: true,
+    });
+    if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+    }
+    const value = receipt as Record<string, unknown>;
+    if (
+      typeof value.memory_id !== "number"
+      || typeof value.room !== "string"
+      || typeof value.source_path !== "string"
+      || value.durable !== true
+      || value.authority !== "postgres"
+      || !Array.isArray(value.warnings)
+    ) {
+      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+    }
+    return { ok: true, ...value, id: value.memory_id, sourcePath: value.source_path };
+  } catch (error) {
+    if (error instanceof RustTransportError) {
+      return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
+    }
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 function refuseToolResult(error) {
   const result = { ok: false, error };
@@ -97,7 +153,7 @@ export function registerSolarisaelTools(pi) {
       tags: z.array(z.string()).optional().describe("lesson kinds: tags."),
     }),
     approval: "write",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const { room, sharedRoot } = roomContext(ctx.cwd);
       const kind = params.kind || "memory";
       const refuse = (error) => {
@@ -113,15 +169,25 @@ export function registerSolarisaelTools(pi) {
         if (lessonOnly.length > 0) return refuse(`kind 'memory' does not accept: ${lessonOnly.join(", ")} — pick a lesson kind or drop the field(s)`);
         const invalidSupersedes = (params.supersedes || []).filter((memoryId) => !/^[1-9]\d*$/.test(memoryId));
         if (invalidSupersedes.length > 0) return refuse(`supersedes accepts positive numeric memory IDs; invalid: ${invalidSupersedes.join(", ")}`);
-        const result = await writeSessionMemory({
-          sharedRoot,
-          room,
-          title: params.title,
-          body: params.body,
-          backup: false,
-          threads: params.threads || [],
-          supersedes: [...new Set(params.supersedes || [])],
-        });
+        const rustConfigured = Boolean(String(process.env.SOLARISAEL_HOUSE_RUST || "").trim());
+        const result = rustConfigured
+          ? await writeRustMemory({
+            room,
+            title: params.title,
+            body: params.body,
+            threads: params.threads || [],
+            supersedes: [...new Set(params.supersedes || [])],
+            signal,
+          })
+          : await writeSessionMemory({
+            sharedRoot,
+            room,
+            title: params.title,
+            body: params.body,
+            backup: false,
+            threads: params.threads || [],
+            supersedes: [...new Set(params.supersedes || [])],
+          });
         return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       }
 
