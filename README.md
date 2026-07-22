@@ -45,6 +45,15 @@ copy of the Full backend; Full operators install the canonical
 [`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate)
 repository separately.
 
+## Retrieval evaluation
+
+The sanitized [`2026-07-22 room retrieval pilot`](./evals/2026-07-22-room-retrieval-pilot.json)
+measured exact-title lookup across ten unique, active room-owned memories in each
+of two rooms. The pilot observed 95% combined viewport recall and 80% combined
+top-1 recall. It is a small favorable-phrasing calibration, not a paraphrase or
+answer-quality benchmark; raw prompts, memory identifiers, excerpts, and
+telemetry remain private.
+
 ## Test
 
 ```text
