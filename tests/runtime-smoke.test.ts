@@ -429,6 +429,7 @@ describe("OMP context hook runtime smoke", () => {
     expect(additions[0].content).toContain("Active spirit: Smoke Room");
     expect(additions[0].content).toContain("Operator: Test Operator");
     expect(additions[0].content).toContain("A memory must stand alone.");
+    expect(additions[0].content).toContain("PostgreSQL is authoritative for durable memories and lessons.");
     expect(additions[0].content).toContain("Do not claim a memory was written without a successful remember receipt.");
     expect(additions[1].content).toContain("Solarisael House worker-routing mode is enabled.");
     expect(additions[1].details).toEqual({ enabled: true });

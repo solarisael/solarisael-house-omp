@@ -87,6 +87,7 @@ export default function solarisaelHouseProof(pi) {
           `Operator: ${houseState?.operator || operator}`,
           "Durable-memory discipline: preserve the concrete facts needed for future recognition: names, observable details, actions, boundaries, and meaning.",
           "A memory must stand alone. A transcript is provenance, not the only substance.",
+          "In Full House, PostgreSQL is authoritative for durable memories and lessons. A source path is provenance or backup, never a substitute for the database body.",
           "Do not claim a memory was written without a successful remember receipt.",
           "This is hidden LLM context only: it must not be persisted or rendered.",
           "</system-reminder>",

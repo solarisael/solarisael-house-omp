@@ -80,10 +80,10 @@ export function registerSolarisaelTools(pi) {
   pi.registerTool({
     name: "remember",
     label: "Solarisael Remember",
-    description: "Write a durable memory or lesson to the Solarisael substrate. For memory, preserve retrieval-bearing concrete facts. Do not replace the event with only a conclusion or transcript pointer. The memory must stand alone.",
+    description: "Write a durable memory or lesson to the Solarisael substrate. In Full House, PostgreSQL is authoritative; source paths are provenance or backup, not the memory body. For memory, preserve retrieval-bearing concrete facts. Do not replace the event with only a conclusion or transcript pointer. The memory must stand alone.",
     parameters: z.object({
       title: z.string().describe("Short title."),
-      body: z.string().describe("Markdown body. For memory: preserve the names, observable details, actions, boundaries, and meaning needed for future recognition. The body must stand alone; a transcript may be provenance but cannot carry the only substance. For lessons: the lesson text."),
+      body: z.string().describe("Markdown body. In Full House this complete body is stored authoritatively in PostgreSQL; a source path cannot replace it. For memory: preserve the names, observable details, actions, boundaries, and meaning needed for future recognition. The body must stand alone; a transcript may be provenance but cannot carry the only substance. For lessons: the lesson text."),
       kind: z.enum(["memory", "coding-lesson", "project-lesson", "writing-lesson", "audio-lesson"]).optional()
         .describe("Destination store. memory (default): a thing that happened. coding-lesson: a reusable code rule with a proof pattern. project-lesson: a project-wide rule (requires 'project'). writing-lesson: a prose-taste rule (register, voice, wit mechanics). audio-lesson: an audio-pipeline rule."),
       threads: z.array(z.string()).optional().describe("memory only: thread keys, 'concept / variant / variant'."),
