@@ -1,20 +1,99 @@
+import { RustJsonlTransport, RustTransportError } from "../rust-transport.ts";
+
+const rustAnamnesisTransports = new Map<string, RustJsonlTransport>();
+const ANAMNESIS_DEFAULT_LIMIT = 10;
+const ANAMNESIS_MAX_LIMIT = 50;
+
+function rustAnamnesisTransport(): RustJsonlTransport | null {
+  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  if (!executable) return null;
+  let transport = rustAnamnesisTransports.get(executable);
+  if (!transport) {
+    transport = new RustJsonlTransport({ executable });
+    rustAnamnesisTransports.set(executable, transport);
+  }
+  return transport;
+}
+
+function evictRustAnamnesisTransport(executable: string, transport: RustJsonlTransport): void {
+  if (rustAnamnesisTransports.get(executable) !== transport) return;
+  rustAnamnesisTransports.delete(executable);
+  transport.close();
+}
+
+export function closeRustAnamnesisTransports(): void {
+  for (const [executable, transport] of rustAnamnesisTransports) {
+    rustAnamnesisTransports.delete(executable);
+    transport.close();
+  }
+}
+
+function rustFailure(error: unknown) {
+  if (error instanceof RustTransportError) {
+    return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
+  }
+  return { ok: false, error: error instanceof Error ? error.message : String(error) };
+}
+
+function validRustAnamnesisResult(value: unknown, mode: string, room: string): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "result must be an object";
+  const result = value as Record<string, unknown>;
+  if (result.ok !== true || result.mode !== mode || result.room !== room || typeof result.room !== "string" || typeof result.found !== "boolean" || !Array.isArray(result.entries) || !Array.isArray(result.warnings)) {
+    return "result must contain ok=true, mode, requested room, found, entries, and warnings";
+  }
+  if (result.found && !result.entries.every((entry) => entry && typeof entry === "object" && !Array.isArray(entry))) {
+    return "found results must contain entry objects";
+  }
+  if (!result.warnings.every((warning) => typeof warning === "string")) return "result.warnings must contain strings";
+  return null;
+}
 import { loadHouseMemory } from "./core.ts";
 
 const EMPTY = { entries: [], warnings: [] };
 
 export async function queryAnamnesis(effectiveRoomDir, room, options = {}) {
   const mode = options?.mode === "consult" ? "consult" : "wake";
-  try {
-    if (mode === "consult" && !String(options?.query || "").trim()) {
-      return { ok: false, mode, ...EMPTY, error: "consult requires a non-empty query" };
+  const query = String(options?.query || "").trim();
+  if (mode === "consult" && !query) return { ok: false, mode, ...EMPTY, error: "consult requires a non-empty query" };
+  const configured = Boolean(String(process.env.SOLARISAEL_HOUSE_RUST || "").trim());
+  const transport = rustAnamnesisTransport();
+  if (transport) {
+    const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+    const requestedLimit = options?.limit === undefined ? ANAMNESIS_DEFAULT_LIMIT : Number(options.limit);
+    const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(ANAMNESIS_MAX_LIMIT, Math.trunc(requestedLimit))) : ANAMNESIS_DEFAULT_LIMIT;
+    const params = {
+      room,
+      mode,
+      ...(mode === "consult" ? { query } : {}),
+      limit,
+    };
+    try {
+      const result = await transport.request("anamnesis", params);
+      const validationError = validRustAnamnesisResult(result, mode, room);
+      if (validationError) {
+        evictRustAnamnesisTransport(executable, transport);
+        return { ok: false, mode, ...EMPTY, error: `invalid Rust anamnesis result: ${validationError}` };
+      }
+      return {
+        ...result,
+        entries: [...result.entries],
+        pillars: result.entries.filter((entry) => (entry as Record<string, unknown>).kind === "pillar"),
+        cycles: result.entries.filter((entry) => (entry as Record<string, unknown>).kind === "cycle"),
+      };
+    } catch (error) {
+      if (!transport.usable) evictRustAnamnesisTransport(executable, transport);
+      return { mode, ...EMPTY, ...rustFailure(error) };
     }
+  }
+  if (configured) return { ok: false, mode, ...EMPTY, error: "Rust anamnesis transport unavailable" };
+  try {
     const memory = await loadHouseMemory();
     if (typeof memory?.runAnamnesisQuery !== "function") {
       return { ok: false, mode, ...EMPTY, error: "runAnamnesisQuery is unavailable" };
     }
     const result = await memory.runAnamnesisQuery(effectiveRoomDir, room, {
       mode,
-      ...(mode === "consult" ? { query: String(options.query).trim() } : {}),
+      ...(mode === "consult" ? { query } : {}),
       ...(options?.limit !== undefined ? { limit: Number(options.limit) } : {}),
     });
     return {

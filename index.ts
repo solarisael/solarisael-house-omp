@@ -8,6 +8,7 @@ export const ADAPTER_API_VERSION = 1;
 import { isFreshConversation, logUnseenConversationTurns } from "./solarisael-house-proof/conversation-log.ts";
 import { closeRustRecallTransports } from "./solarisael-house-proof/recall.ts";
 import { closeRustRememberTransports } from "./solarisael-house-proof/tools.ts";
+import { closeRustAnamnesisTransports } from "./solarisael-house-proof/anamnesis.ts";
 import { loadHouseQueryRouting } from "./solarisael-house-proof/core.ts";
 import { resolveEntities } from "./solarisael-house-proof/entity-resolution.ts";
 import { automaticRecallViewport, createRecallViewportSession } from "./solarisael-house-proof/recall-viewport.ts";
@@ -316,6 +317,7 @@ export default function solarisaelHouseProof(pi) {
   pi.on("shutdown", () => {
     closeRustRecallTransports();
     closeRustRememberTransports();
+    closeRustAnamnesisTransports();
   });
 
   pi.on("agent_end", async (event, ctx) => {

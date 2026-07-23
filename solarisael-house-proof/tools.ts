@@ -139,6 +139,47 @@ async function writeRustLesson({ room, kind, title, body, fields, backup, signal
   }
 }
 
+async function writeRustAnamnesis({ room, payload, signal }) {
+  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  const transport = rustRememberTransport();
+  if (!transport) return null;
+  const operation = payload?.operation;
+  const params = { room, ...payload };
+  try {
+    const receipt = await transport.request("anamnesis_write", params, {
+      signal: signal || undefined,
+      settleDefinitively: true,
+    });
+    if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+      evictRustRememberTransport(executable, transport);
+      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+    }
+    const value = receipt as Record<string, unknown>;
+    if (
+      value.ok !== true
+      || value.operation !== operation
+      || value.room !== room
+      || typeof value.title !== "string"
+      || (operation === "add" && (value.kind !== "pillar" && value.kind !== "cycle"))
+      || (operation === "append-rep" && (!Number.isInteger(value.repNumber) || value.repNumber < 1))
+      || value.durable !== true
+      || value.authority !== "postgres"
+      || !Array.isArray(value.warnings)
+      || !value.warnings.every((warning) => typeof warning === "string")
+    ) {
+      evictRustRememberTransport(executable, transport);
+      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+    }
+    return { ok: true, ...value };
+  } catch (error) {
+    if (!transport.usable) evictRustRememberTransport(executable, transport);
+    if (error instanceof RustTransportError) {
+      return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
+    }
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export function closeRustRememberTransports() {
   for (const [executable, transport] of rustRememberTransports) {
     rustRememberTransports.delete(executable);
@@ -679,16 +720,21 @@ export function registerSolarisaelTools(pi) {
       const { room, sharedRoot } = roomContext(ctx.cwd);
       const payload = { ...params };
       if (params.operation === "add") {
-        if (!params.kind || !params.fidelity || !params.activation || !params.ramp) {
-          return refuseToolResult("add requires kind, fidelity, activation, and ramp");
-        }
-        const result = await writeAnamnesisDrawer({ sharedRoot, room, payload });
+      if (params.kind === "pillar" && params.seedRep !== undefined) {
+        return refuseToolResult("pillars cannot include seedRep");
+      }
+      if (!params.kind || !params.fidelity || !params.activation || !String(params.ramp || "").trim()) {
+        return refuseToolResult("add requires kind, fidelity, activation, and ramp");
+      }
+        const rust = await writeRustAnamnesis({ room, payload, signal: _signal });
+        const result = rust || await writeAnamnesisDrawer({ sharedRoot, room, payload });
         return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       }
-      if (!Number.isInteger(params.repNumber) || !params.howItWent || !params.portalPull || !params.lighter || !Array.isArray(params.sourcePaths)) {
+      if (!Number.isInteger(params.repNumber) || params.repNumber < 1 || !String(params.howItWent || "").trim() || !String(params.portalPull || "").trim() || !String(params.lighter || "").trim() || !Array.isArray(params.sourcePaths)) {
         return refuseToolResult("append-rep requires integer repNumber, howItWent, portalPull, lighter, and sourcePaths");
       }
-      const result = await appendAnamnesisRep({ sharedRoot, room, payload });
+      const rust = await writeRustAnamnesis({ room, payload, signal: _signal });
+      const result = rust || await appendAnamnesisRep({ sharedRoot, room, payload });
       return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
     },
   });
