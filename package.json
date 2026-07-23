@@ -8,9 +8,11 @@
   "type": "module",
   "main": "index.ts",
   "scripts": {
+    "build:installer": "bun build installer.ts --compile --outfile install.exe",
     "build:portable": "bun run build-portable.ts",
+    "gui": "bun run gui-server.ts",
     "verify:install": "bun run verify-install.ts",
-    "test:focused": "bun test tests/discovery.test.ts tests/portable-bundle.test.ts",
+    "test:focused": "bun test tests/discovery.test.ts tests/portable-bundle.test.ts tests/installer.test.ts tests/gui-server.test.ts",
     "test": "bun test"
   }
 }

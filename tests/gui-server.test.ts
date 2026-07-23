@@ -1,0 +1,34 @@
+import { describe, expect, test } from "bun:test";
+import { startGuiServer } from "../gui-server.ts";
+
+const fake = `process.stdin.setEncoding('utf8'); process.stdin.on('data', d => { for (const line of d.split('\\n')) { if (!line) continue; const x=JSON.parse(line); process.stdout.write(JSON.stringify({protocol:1,id:x.id,result:{ok:true,method:x.method,params:x.params}})+'\\n'); } });`;
+
+describe("GUI server security boundary", () => {
+  let handle: Awaited<ReturnType<typeof startGuiServer>>;
+  test("binds localhost, emits CSP and serves assets", async () => {
+    handle = await startGuiServer({ executable: process.execPath, args: ["-e", fake], cwd: import.meta.dir + "/.." });
+    const response = await fetch(`http://127.0.0.1:${handle.port}/`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const csrf = await (await fetch(`http://127.0.0.1:${handle.port}/api/csrf`)).json() as { token: string };
+    expect(csrf.token).toBe(handle.csrfToken);
+  });
+  test("requires csrf and rejects disallowed RPC method", async () => {
+    const url = `http://127.0.0.1:${handle.port}/api/rpc`;
+    expect((await fetch(url, { method:"POST", body:"{}" })).status).toBe(403);
+    const r = await fetch(url, { method:"POST", headers:{"x-csrf-token":handle.csrfToken,"content-type":"application/json","origin":`http://127.0.0.1:${handle.port}`}, body:JSON.stringify({method:"exec",params:{}}) });
+    expect(r.status).toBe(400);
+  });
+  test("dispatches valid payloads and health uses operation check", async () => {
+    const origin = `http://127.0.0.1:${handle.port}`;
+    const rpc = await fetch(origin + "/api/rpc", { method: "POST", headers: {"x-csrf-token": handle.csrfToken, "content-type": "application/json", origin}, body: JSON.stringify({ method: "remember", params: { room: "house", kind: "memory", operation: "add", repNumber: 1, dryRun: true, title: "valid", body: "payload" } }) });
+    expect(rpc.status).toBe(200);
+    const payload = await rpc.json() as any;
+    expect(payload.result.params).toEqual({ room: "house", kind: "memory", operation: "add", repNumber: 1, dryRun: true, title: "valid", body: "payload" });
+    const health = await fetch(origin + "/api/health");
+    expect(health.status).toBe(200);
+    expect((await health.json() as any).cluster.params).toEqual({ operation: "check", room: "gui" });
+  });
+  test("closes cleanly", async () => { await handle.close(); });
+});

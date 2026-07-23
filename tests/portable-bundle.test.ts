@@ -175,6 +175,8 @@ describe("portable bundle builder safety", () => {
     await mkdir(path.join(stagedAdapter, "commands"), { recursive: true });
     await mkdir(path.join(stagedAdapter, "solarisael-house-proof"), { recursive: true });
     await cp(portableBuilder, stagedBuilder);
+    for (const filename of ["discovery.ts", "rust-transport.ts", "gui-server.ts", "installer.ts"]) await cp(path.join(adapterRoot, filename), path.join(stagedAdapter, filename));
+    await cp(path.join(adapterRoot, "gui"), path.join(stagedAdapter, "gui"), { recursive: true });
     await cp(path.join(adapterRoot, "discovery.ts"), path.join(stagedAdapter, "discovery.ts"));
     for (const filename of ["README.md", "INSTALL.md", "USAGE.md", "IDENTITY_GUIDE.md", "LICENSE", "NOTICE"]) {
       await cp(path.join(adapterRoot, "..", "solarisael-house", filename), path.join(core, filename));
@@ -190,9 +192,9 @@ describe("portable bundle builder safety", () => {
     await writeFile(path.join(core, "src", "portable-sentinel.ts"), "export const sentinel = true;\n", "utf8");
     await writeFile(path.join(core, "index.ts"), "export {};\n", "utf8");
     await writeFile(path.join(core, "package.json"), '{"name":"portable-core"}\n', "utf8");
-
     await run(process.execPath, [stagedBuilder, output], stagedAdapter, isolatedEnv(home, {
       SOLARISAEL_HOUSE_CORE: core,
+      SOLARISAEL_HOUSE_RUST: path.join(adapterRoot, "installer-test.exe"),
     }));
 
     expect(await readFile(configPath, "utf8")).toBe(configBefore);
@@ -212,9 +214,9 @@ describe("portable bundle builder safety", () => {
     const home = path.join(root, "home");
     const output = path.join(root, "portable-onboarding.zip");
     await mkdir(path.join(home, "temp"), { recursive: true });
-
     await run(process.execPath, [portableBuilder, output], adapterRoot, isolatedEnv(home, {
       SOLARISAEL_HOUSE_CORE: path.resolve(adapterRoot, "..", "solarisael-house"),
+      SOLARISAEL_HOUSE_RUST: path.join(adapterRoot, "installer-test.exe"),
     }));
 
     const archive = await run("tar", ["-tf", output], root, isolatedEnv(home));
@@ -240,6 +242,14 @@ describe("portable bundle builder safety", () => {
       "solarisael-house-omp/LICENSE",
       "solarisael-house-omp/NOTICE",
       "solarisael-house-omp/verify-install.ts",
+      "solarisael-house-omp/rust-transport.ts",
+      "solarisael-house-omp/gui-server.ts",
+      "solarisael-house-omp/installer.ts",
+      "solarisael-house-omp/gui/index.html",
+      "solarisael-house-omp/gui/app.js",
+      "solarisael-house-omp/gui/style.css",
+      "solarisael-house-omp/install.exe",
+      "solarisael-house-omp/package-manifest.json",
     ]));
     expect(entries).not.toContain("verify-install.ts");
     expect(entries.some((entry) => entry.startsWith("solarisael-house-substrate/"))).toBe(false);

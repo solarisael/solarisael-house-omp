@@ -86,6 +86,32 @@ function verifyRustBundle(checks: Check[]): void {
     add(checks, "Rust artifact readable", false, error instanceof Error ? error.message : String(error));
   }
 }
+function verifyPortableManifest(checks: Check[]): void {
+  const manifestPath = path.join(adapterRoot, "package-manifest.json");
+  if (!existsSync(manifestPath)) return;
+  let manifest: any;
+  try { manifest = readJson(manifestPath); } catch (error) { add(checks, "package manifest", false, error instanceof Error ? error.message : String(error)); return; }
+  const required = ["discovery.ts", "rust-transport.ts", "gui-server.ts", "installer.ts", "gui/index.html", "gui/app.js", "gui/style.css"];
+  add(checks, "GUI and installer manifest", Array.isArray(manifest.artifacts), "package-manifest.json");
+  for (const relative of required) {
+    const artifact = manifest.artifacts?.find((entry: any) => entry?.path === `solarisael-house-omp/${relative}`);
+    const file = path.join(adapterRoot, relative);
+    if (!artifact || !existsSync(file)) { add(checks, `portable artifact ${relative}`, false, file); continue; }
+    const details = statSync(file);
+    const hash = createHash("sha256").update(readFileSync(file)).digest("hex");
+    add(checks, `portable artifact ${relative}`, details.isFile() && details.size === artifact.size && hash === artifact.sha256, file);
+  }
+  const installer = String(manifest.installer || "");
+  const installerPath = path.join(adapterRoot, installer);
+  const details = existsSync(installerPath) ? statSync(installerPath) : null;
+  add(checks, "compiled installer", Boolean(details?.isFile()), installerPath);
+  if (details?.isFile()) {
+    const artifact = manifest.artifacts.find((entry: any) => entry?.path === `solarisael-house-omp/${installer}`);
+    const hash = createHash("sha256").update(readFileSync(installerPath)).digest("hex");
+    add(checks, "compiled installer SHA256", Boolean(artifact && hash === artifact.sha256 && details.size === artifact.size), installerPath);
+    add(checks, "compiled installer platform name", path.basename(installerPath) === (process.platform === "win32" ? "install.exe" : "install"), path.basename(installerPath));
+  }
+}
 
 
 const scriptRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -242,6 +268,7 @@ if (!existsSync(configPath)) {
   add(checks, "OMP hygiene configured", config.includes(hygiene), hygiene);
 }
 verifyRustBundle(checks);
+verifyPortableManifest(checks);
 
 const staticFailed = checks.filter((check) => !check.ok && check.name !== "substrate runtime health");
 const mode: VerificationMode = !substrateConfigured
