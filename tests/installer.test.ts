@@ -22,7 +22,7 @@ async function fixture(verifier = "console.log(JSON.stringify({ok:true}));\n") {
 }
 afterEach(async () => { await Promise.all(roots.splice(0).map((x) => rm(x, { recursive: true, force: true }))); });
 
-describe("installer", () => {
+describe.serial("installer", () => {
   test("rejects unsafe room and missing required bundle without mutation", async () => { const { root, zip } = await fixture(); const target = path.join(root, "new target"); const result = await run(["--bundle", zip, "--target", target, "--room", "../escape", "--mode", "base", "--dry-run"]); expect(result.code).not.toBe(0); expect(await stat(target).catch(() => null)).toBeNull(); });
   test("dry-run validates a bundle while leaving target absent", async () => { const { root, zip } = await fixture(); const target = path.join(root, "target with spaces"); const result = await run(["--bundle", zip, "--target", target, "--room", "demo-room", "--mode", "base", "--dry-run"]); expect(result.code).toBe(0); expect(JSON.parse(result.stdout).dryRun).toBe(true); expect(await stat(target).catch(() => null)).toBeNull(); });
   test("existing target refuses without force", async () => { const { root, zip } = await fixture(); const target = path.join(root, "existing"); await mkdir(target); await writeFile(path.join(target, "keep"), "yes"); const result = await run(["--bundle", zip, "--target", target, "--room", "demo", "--mode", "base"]); expect(result.code).not.toBe(0); expect(await readFile(path.join(target, "keep"), "utf8")).toBe("yes"); });

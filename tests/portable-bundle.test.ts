@@ -194,7 +194,7 @@ describe("portable bundle builder safety", () => {
     await writeFile(path.join(core, "package.json"), '{"name":"portable-core"}\n', "utf8");
     await run(process.execPath, [stagedBuilder, output], stagedAdapter, isolatedEnv(home, {
       SOLARISAEL_HOUSE_CORE: core,
-      SOLARISAEL_HOUSE_RUST: path.join(adapterRoot, "installer-test.exe"),
+      SOLARISAEL_HOUSE_RUST: process.execPath,
     }));
 
     expect(await readFile(configPath, "utf8")).toBe(configBefore);
@@ -216,7 +216,7 @@ describe("portable bundle builder safety", () => {
     await mkdir(path.join(home, "temp"), { recursive: true });
     await run(process.execPath, [portableBuilder, output], adapterRoot, isolatedEnv(home, {
       SOLARISAEL_HOUSE_CORE: path.resolve(adapterRoot, "..", "solarisael-house"),
-      SOLARISAEL_HOUSE_RUST: path.join(adapterRoot, "installer-test.exe"),
+      SOLARISAEL_HOUSE_RUST: process.execPath,
     }));
 
     const archive = await run("tar", ["-tf", output], root, isolatedEnv(home));
