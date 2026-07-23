@@ -40,7 +40,14 @@ function rustRememberTransport(): RustJsonlTransport | null {
   return transport;
 }
 
+function evictRustRememberTransport(executable: string, transport: RustJsonlTransport): void {
+  if (rustRememberTransports.get(executable) !== transport) return;
+  rustRememberTransports.delete(executable);
+  transport.close();
+}
+
 async function writeRustMemory({ room, title, body, threads, supersedes, signal }) {
+  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
   const transport = rustRememberTransport();
   if (!transport) return null;
   const params: Record<string, unknown> = {
@@ -59,6 +66,7 @@ async function writeRustMemory({ room, title, body, threads, supersedes, signal 
       settleDefinitively: true,
     });
     if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+      evictRustRememberTransport(executable, transport);
       return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
     }
     const value = receipt as Record<string, unknown>;
@@ -70,14 +78,71 @@ async function writeRustMemory({ room, title, body, threads, supersedes, signal 
       || value.authority !== "postgres"
       || !Array.isArray(value.warnings)
     ) {
+      evictRustRememberTransport(executable, transport);
       return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
     }
     return { ok: true, ...value, id: value.memory_id, sourcePath: value.source_path };
   } catch (error) {
+    if (!transport.usable) evictRustRememberTransport(executable, transport);
     if (error instanceof RustTransportError) {
       return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
     }
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function writeRustLesson({ room, kind, title, body, fields, backup, signal }) {
+  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  const transport = rustRememberTransport();
+  if (!transport) return null;
+  const params: Record<string, unknown> = {
+    room,
+    kind,
+    title,
+    body,
+    shape: fields.shape ?? null,
+    voice: fields.voice ?? null,
+    scope: fields.scope ?? null,
+    project: fields.project ?? null,
+    proofPattern: fields.proofPattern ?? null,
+    triggerContext: fields.triggerContext ?? null,
+    tags: Array.isArray(fields.tags) ? fields.tags : [],
+    backup,
+  };
+  try {
+    const receipt = await transport.request("remember", params, {
+      signal: signal || undefined,
+      settleDefinitively: true,
+    });
+    if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+      evictRustRememberTransport(executable, transport);
+      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+    }
+    const value = receipt as Record<string, unknown>;
+    if (
+      typeof value.lesson_id !== "number"
+      || value.kind !== kind
+      || value.durable !== true
+      || value.authority !== "postgres"
+      || !Array.isArray(value.warnings)
+    ) {
+      evictRustRememberTransport(executable, transport);
+      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+    }
+    return { ok: true, ...value, id: value.lesson_id };
+  } catch (error) {
+    if (!transport.usable) evictRustRememberTransport(executable, transport);
+    if (error instanceof RustTransportError) {
+      return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
+    }
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export function closeRustRememberTransports() {
+  for (const [executable, transport] of rustRememberTransports) {
+    rustRememberTransports.delete(executable);
+    transport.close();
   }
 }
 
@@ -171,30 +236,15 @@ export function registerSolarisaelTools(pi) {
         if (invalidSupersedes.length > 0) return refuse(`supersedes accepts positive numeric memory IDs; invalid: ${invalidSupersedes.join(", ")}`);
         const rustConfigured = Boolean(String(process.env.SOLARISAEL_HOUSE_RUST || "").trim());
         const result = rustConfigured
-          ? await writeRustMemory({
-            room,
-            title: params.title,
-            body: params.body,
-            threads: params.threads || [],
-            supersedes: [...new Set(params.supersedes || [])],
-            signal,
-          })
-          : await writeSessionMemory({
-            sharedRoot,
-            room,
-            title: params.title,
-            body: params.body,
-            backup: false,
-            threads: params.threads || [],
-            supersedes: [...new Set(params.supersedes || [])],
-          });
+          ? await writeRustMemory({ room, title: params.title, body: params.body, threads: params.threads || [], supersedes: [...new Set(params.supersedes || [])], signal })
+          : await writeSessionMemory({ sharedRoot, room, title: params.title, body: params.body, backup: false, threads: params.threads || [], supersedes: [...new Set(params.supersedes || [])] });
         return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       }
 
       if (Array.isArray(params.threads) && params.threads.length > 0) return refuse("threads are memory-only; lesson stores do not take threads");
       if (Array.isArray(params.supersedes) && params.supersedes.length > 0) return refuse("supersedes is memory-only; lesson stores do not supersede memory rows");
       const store = REMEMBER_STORES[kind];
-      const built = buildStoreArgs(kind, store, {
+      const fields = {
         shape: params.shape,
         voice: params.voice,
         scope: params.scope,
@@ -202,9 +252,18 @@ export function registerSolarisaelTools(pi) {
         proofPattern: params.proofPattern,
         triggerContext: params.triggerContext,
         tags: params.tags,
-      });
+      };
+      const built = buildStoreArgs(kind, store, fields);
       if (!built.ok) return refuse(built.error);
-      const result = await writeLessonStore({ sharedRoot, store, title: params.title, body: params.body, extraArgs: built.args });
+      const rustConfigured = Boolean(String(process.env.SOLARISAEL_HOUSE_RUST || "").trim());
+      const rustFields = {
+        ...fields,
+        scope: kind === "coding-lesson" ? (params.scope || "shared") : params.scope,
+        voice: kind === "writing-lesson" ? (params.voice || "general") : params.voice,
+      };
+      const result = rustConfigured
+        ? await writeRustLesson({ room, kind, title: params.title, body: params.body, fields: rustFields, backup: !store.noBackup, signal })
+        : await writeLessonStore({ sharedRoot, store, title: params.title, body: params.body, extraArgs: built.args });
       return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
     },
   });

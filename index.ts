@@ -6,7 +6,8 @@ export const ADAPTER_API_VERSION = 1;
 // shaped modules under ./solarisael-house-proof/ so this door only wires hooks.
 
 import { isFreshConversation, logUnseenConversationTurns } from "./solarisael-house-proof/conversation-log.ts";
-import { closeRustRecallTransports, compactRecall, recallWithRouting } from "./solarisael-house-proof/recall.ts";
+import { closeRustRecallTransports } from "./solarisael-house-proof/recall.ts";
+import { closeRustRememberTransports } from "./solarisael-house-proof/tools.ts";
 import { loadHouseQueryRouting } from "./solarisael-house-proof/core.ts";
 import { resolveEntities } from "./solarisael-house-proof/entity-resolution.ts";
 import { automaticRecallViewport, createRecallViewportSession } from "./solarisael-house-proof/recall-viewport.ts";
@@ -314,6 +315,7 @@ export default function solarisaelHouseProof(pi) {
 
   pi.on("shutdown", () => {
     closeRustRecallTransports();
+    closeRustRememberTransports();
   });
 
   pi.on("agent_end", async (event, ctx) => {

@@ -3,6 +3,7 @@ import { describe, expect, test, afterEach } from "bun:test";
 import solarisaelHouseProof from "../index.ts";
 import { RustJsonlTransport } from "../rust-transport.ts";
 import { closeRustRecallTransports, recallWithRouting } from "../solarisael-house-proof/recall.ts";
+import { closeRustRememberTransports } from "../solarisael-house-proof/tools.ts";
 type CapturedTool = {
   name: string;
   parameters: Schema;
@@ -371,6 +372,41 @@ describe("OMP adapter registration", () => {
     });
   });
 
+  test("evicts failed remember workers without falling back and respawns later writes", async () => {
+    const originalRust = process.env.SOLARISAEL_HOUSE_RUST;
+    const originalRequest = RustJsonlTransport.prototype.request;
+    const originalClose = RustJsonlTransport.prototype.close;
+    let calls = 0;
+    let closed = 0;
+    process.env.SOLARISAEL_HOUSE_RUST = "remember-recovery-test";
+    RustJsonlTransport.prototype.request = async function () {
+      calls += 1;
+      if (calls === 1) {
+        Object.defineProperty(this, "usable", { value: false });
+        throw new Error("worker exited");
+      }
+      return { lesson_id: 7, kind: "coding-lesson", durable: true, authority: "postgres", warnings: [] };
+    };
+    RustJsonlTransport.prototype.close = function () {
+      closed += 1;
+      return originalClose.call(this);
+    };
+    try {
+      const remember = toolMap(registerAdapter().tools).remember;
+      const failed = await remember.execute!("remember-failed", { title: "Failure", body: "No fallback", kind: "coding-lesson" }, undefined, undefined, { cwd: process.cwd() });
+      expect(failed.details).toMatchObject({ ok: false, error: "worker exited" });
+      const recovered = await remember.execute!("remember-recovered", { title: "Recovery", body: "Respawn", kind: "coding-lesson" }, undefined, undefined, { cwd: process.cwd() });
+      expect(recovered.details).toMatchObject({ ok: true, lesson_id: 7, id: 7 });
+      expect(calls).toBe(2);
+      expect(closed).toBe(1);
+    } finally {
+      closeRustRememberTransports();
+      RustJsonlTransport.prototype.request = originalRequest;
+      RustJsonlTransport.prototype.close = originalClose;
+      if (originalRust === undefined) delete process.env.SOLARISAEL_HOUSE_RUST;
+      else process.env.SOLARISAEL_HOUSE_RUST = originalRust;
+    }
+  });
   test("lesson writes reach store validation instead of an undefined registry", async () => {
     const remember = toolMap(registerAdapter().tools).remember;
     expect(remember.execute).toBeFunction();
