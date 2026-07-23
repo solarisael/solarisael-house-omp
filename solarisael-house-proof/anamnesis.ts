@@ -1,11 +1,12 @@
 import { RustJsonlTransport, RustTransportError } from "../rust-transport.ts";
+import { discoverRustExecutable } from "../discovery.ts";
 
 const rustAnamnesisTransports = new Map<string, RustJsonlTransport>();
 const ANAMNESIS_DEFAULT_LIMIT = 10;
 const ANAMNESIS_MAX_LIMIT = 50;
 
 function rustAnamnesisTransport(): RustJsonlTransport | null {
-  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  const executable = discoverRustExecutable();
   if (!executable) return null;
   let transport = rustAnamnesisTransports.get(executable);
   if (!transport) {
@@ -55,10 +56,10 @@ export async function queryAnamnesis(effectiveRoomDir, room, options = {}) {
   const mode = options?.mode === "consult" ? "consult" : "wake";
   const query = String(options?.query || "").trim();
   if (mode === "consult" && !query) return { ok: false, mode, ...EMPTY, error: "consult requires a non-empty query" };
-  const configured = Boolean(String(process.env.SOLARISAEL_HOUSE_RUST || "").trim());
+  const executable = discoverRustExecutable();
+  const configured = Boolean(executable);
   const transport = rustAnamnesisTransport();
   if (transport) {
-    const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
     const requestedLimit = options?.limit === undefined ? ANAMNESIS_DEFAULT_LIMIT : Number(options.limit);
     const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(ANAMNESIS_MAX_LIMIT, Math.trunc(requestedLimit))) : ANAMNESIS_DEFAULT_LIMIT;
     const params = {

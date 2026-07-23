@@ -24,13 +24,14 @@ import {
   writeSessionMemory,
 } from "./substrate.ts";
 import { RustJsonlTransport, RustTransportError } from "../rust-transport.ts";
+import { discoverRustExecutable } from "../discovery.ts";
 import { dispatchWorker, laneStatus } from "./routing.ts";
 import { REMEMBER_STORES, buildStoreArgs } from "./stores.ts";
 
 const rustRememberTransports = new Map<string, RustJsonlTransport>();
 
 function rustRememberTransport(): RustJsonlTransport | null {
-  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  const executable = discoverRustExecutable();
   if (!executable) return null;
   let transport = rustRememberTransports.get(executable);
   if (!transport) {
@@ -47,7 +48,7 @@ function evictRustRememberTransport(executable: string, transport: RustJsonlTran
 }
 
 async function writeRustMemory({ room, title, body, threads, supersedes, signal }) {
-  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  const executable = discoverRustExecutable();
   const transport = rustRememberTransport();
   if (!transport) return null;
   const params: Record<string, unknown> = {
@@ -92,7 +93,7 @@ async function writeRustMemory({ room, title, body, threads, supersedes, signal 
 }
 
 async function writeRustLesson({ room, kind, title, body, fields, backup, signal }) {
-  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  const executable = discoverRustExecutable();
   const transport = rustRememberTransport();
   if (!transport) return null;
   const params: Record<string, unknown> = {
@@ -140,9 +141,9 @@ async function writeRustLesson({ room, kind, title, body, fields, backup, signal
 }
 
 async function writeRustAnamnesis({ room, payload, signal }) {
-  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  const executable = discoverRustExecutable();
   const transport = rustRememberTransport();
-  if (!transport) return null;
+  if (!transport || !executable) return null;
   const operation = payload?.operation;
   const params = { room, ...payload };
   try {
@@ -275,7 +276,7 @@ export function registerSolarisaelTools(pi) {
         if (lessonOnly.length > 0) return refuse(`kind 'memory' does not accept: ${lessonOnly.join(", ")} — pick a lesson kind or drop the field(s)`);
         const invalidSupersedes = (params.supersedes || []).filter((memoryId) => !/^[1-9]\d*$/.test(memoryId));
         if (invalidSupersedes.length > 0) return refuse(`supersedes accepts positive numeric memory IDs; invalid: ${invalidSupersedes.join(", ")}`);
-        const rustConfigured = Boolean(String(process.env.SOLARISAEL_HOUSE_RUST || "").trim());
+        const rustConfigured = Boolean(discoverRustExecutable());
         const result = rustConfigured
           ? await writeRustMemory({ room, title: params.title, body: params.body, threads: params.threads || [], supersedes: [...new Set(params.supersedes || [])], signal })
           : await writeSessionMemory({ sharedRoot, room, title: params.title, body: params.body, backup: false, threads: params.threads || [], supersedes: [...new Set(params.supersedes || [])] });
@@ -296,7 +297,7 @@ export function registerSolarisaelTools(pi) {
       };
       const built = buildStoreArgs(kind, store, fields);
       if (!built.ok) return refuse(built.error);
-      const rustConfigured = Boolean(String(process.env.SOLARISAEL_HOUSE_RUST || "").trim());
+      const rustConfigured = Boolean(discoverRustExecutable());
       const rustFields = {
         ...fields,
         scope: kind === "coding-lesson" ? (params.scope || "shared") : params.scope,

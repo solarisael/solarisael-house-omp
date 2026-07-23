@@ -1,7 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { currentRustPlatform, discoverRustExecutable, rustBinaryName } from "./discovery.ts";
 import { substrateHealth } from "./solarisael-house-proof/substrate.ts";
 
 type Check = {
@@ -50,6 +52,39 @@ function add(checks: Check[], name: string, ok: boolean, detail: string) {
 
 function readJson(filePath: string): CompatibilityContract {
   return JSON.parse(readFileSync(filePath, "utf8")) as CompatibilityContract;
+}
+
+function verifyRustBundle(checks: Check[]): void {
+  const manifestPath = path.join(adapterRoot, "rust-manifest.json");
+  if (!existsSync(manifestPath)) return;
+  let manifest: any;
+  try { manifest = readJson(manifestPath); } catch (error) {
+    add(checks, "Rust manifest", false, `invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  const platform = currentRustPlatform();
+  const artifact = Array.isArray(manifest.artifacts) ? manifest.artifacts.find((entry: any) => entry?.platform === platform) : null;
+  add(checks, "Rust manifest platform", Boolean(artifact), platform ? `expected ${platform}` : "unsupported host platform");
+  if (!artifact || typeof artifact.path !== "string") return;
+  const artifactPath = path.resolve(adapterRoot, artifact.path);
+  const insideAdapter = artifactPath === adapterRoot || artifactPath.startsWith(`${adapterRoot}${path.sep}`);
+  add(checks, "Rust artifact path", insideAdapter, artifactPath);
+  if (!insideAdapter || !existsSync(artifactPath)) {
+    add(checks, "Rust artifact file", false, artifactPath);
+    return;
+  }
+  try {
+    const details = statSync(artifactPath);
+    add(checks, "Rust artifact regular file", details.isFile(), artifactPath);
+    if (!details.isFile()) return;
+    add(checks, "Rust artifact permissions", process.platform === "win32" || (details.mode & 0o111) !== 0, "must be executable");
+    const hash = createHash("sha256").update(readFileSync(artifactPath)).digest("hex");
+    add(checks, "Rust artifact SHA256", hash === artifact.sha256, `expected ${artifact.sha256}; got ${hash}`);
+    add(checks, "Rust artifact size", details.size === artifact.size, `expected ${artifact.size}; got ${details.size}`);
+    add(checks, "Rust artifact name", path.basename(artifactPath) === rustBinaryName(platform), path.basename(artifactPath));
+  } catch (error) {
+    add(checks, "Rust artifact readable", false, error instanceof Error ? error.message : String(error));
+  }
 }
 
 
@@ -206,6 +241,7 @@ if (!existsSync(configPath)) {
   add(checks, "OMP entrypoint configured", config.includes(entrypoint), entrypoint);
   add(checks, "OMP hygiene configured", config.includes(hygiene), hygiene);
 }
+verifyRustBundle(checks);
 
 const staticFailed = checks.filter((check) => !check.ok && check.name !== "substrate runtime health");
 const mode: VerificationMode = !substrateConfigured

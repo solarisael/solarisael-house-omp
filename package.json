@@ -9,6 +9,8 @@
   "main": "index.ts",
   "scripts": {
     "build:portable": "bun run build-portable.ts",
+    "verify:install": "bun run verify-install.ts",
+    "test:focused": "bun test tests/discovery.test.ts tests/portable-bundle.test.ts",
     "test": "bun test"
   }
 }

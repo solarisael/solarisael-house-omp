@@ -22,7 +22,7 @@ const result = (query: string) => ({
 });
 
 describe("Rust recall routing", () => {
-  beforeEach(() => { process.env.SOLARISAEL_HOUSE_RUST = "rust-test"; });
+  beforeEach(() => { process.env.SOLARISAEL_HOUSE_RUST = process.execPath; });
   afterEach(() => {
     RustJsonlTransport.prototype.request = originalRequest;
     closeRustRecallTransports();

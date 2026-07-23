@@ -1,9 +1,10 @@
-import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-
+import { discoverRustExecutable, rustBinaryName, rustPlatform, RUST_VERSION } from "./discovery.ts";
 const adapterRoot = path.dirname(fileURLToPath(import.meta.url));
 const projectsRoot = path.dirname(adapterRoot);
 const coreRoot = process.env.SOLARISAEL_HOUSE_CORE
@@ -36,6 +37,22 @@ function run(command: string, args: string[], cwd: string): Promise<void> {
       : reject(new Error(`${command} exited with code ${code}`)));
   });
 }
+async function rustArtifacts(stagingRoot: string): Promise<void> {
+  const platform = rustPlatform();
+  if (!platform) return;
+  const executable = discoverRustExecutable({ env: process.env, moduleDir: adapterRoot });
+  if (!executable) return;
+  const name = rustBinaryName(platform);
+  const destination = path.join(stagingRoot, "solarisael-house-omp", "bin", platform, name);
+  await mkdir(path.dirname(destination), { recursive: true });
+  await cp(executable, destination);
+  const hash = createHash("sha256").update(Buffer.from(await Bun.file(destination).arrayBuffer())).digest("hex");
+  const details = await stat(destination);
+  await writeFile(path.join(stagingRoot, "solarisael-house-omp", "rust-manifest.json"), JSON.stringify({
+    version: RUST_VERSION,
+    artifacts: [{ platform, path: `bin/${platform}/${name}`, sha256: hash, size: details.size }],
+  }, null, 2) + "\n", "utf8");
+}
 
 const stagingParent = await mkdtemp(path.join(os.tmpdir(), "solarisael-house-portable-"));
 const stagingRoot = path.join(stagingParent, "bundle");
@@ -65,7 +82,7 @@ try {
   ).catch((error) => {
     if (error?.code !== "ENOENT") throw error;
   });
-  for (const filename of ["index.ts", "hygiene.ts", "package.json", "README.md", "LICENSE", "NOTICE"]) {
+  for (const filename of ["index.ts", "discovery.ts", "hygiene.ts", "package.json", "README.md", "LICENSE", "NOTICE"]) {
     await cp(path.join(adapterRoot, filename), path.join(stagingRoot, "solarisael-house-omp", filename));
   }
 
@@ -82,6 +99,7 @@ try {
     path.join(stagingRoot, "starter-room"),
     { recursive: true },
   );
+  await rustArtifacts(stagingRoot);
 
   await writeFile(path.join(stagingRoot, "SETUP.txt"), setup, "utf8");
 

@@ -175,6 +175,7 @@ describe("portable bundle builder safety", () => {
     await mkdir(path.join(stagedAdapter, "commands"), { recursive: true });
     await mkdir(path.join(stagedAdapter, "solarisael-house-proof"), { recursive: true });
     await cp(portableBuilder, stagedBuilder);
+    await cp(path.join(adapterRoot, "discovery.ts"), path.join(stagedAdapter, "discovery.ts"));
     for (const filename of ["README.md", "INSTALL.md", "USAGE.md", "IDENTITY_GUIDE.md", "LICENSE", "NOTICE"]) {
       await cp(path.join(adapterRoot, "..", "solarisael-house", filename), path.join(core, filename));
     }
@@ -199,6 +200,7 @@ describe("portable bundle builder safety", () => {
 
     const archive = await run("tar", ["-tf", output], root, isolatedEnv(home));
     expect(archive.stdout).toMatch(/solarisael-house[\\/]src[\\/]portable-sentinel\.ts/);
+    expect(archive.stdout).toMatch(/solarisael-house-omp[\\/]discovery\.ts/);
     expect(archive.stdout).toMatch(/solarisael-house-omp[\\/]index\.ts/);
 
     const builderSource = await readFile(portableBuilder, "utf8");

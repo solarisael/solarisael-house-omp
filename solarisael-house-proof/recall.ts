@@ -6,6 +6,7 @@ import path from "node:path";
 import { loadHouseCore, loadHouseMemory } from "./core.ts";
 import { runWslDiagnostic, substrateConfigurationError, substratePaths, windowsPathToWsl } from "./substrate.ts";
 import { RustJsonlTransport, RustTransportError } from "../rust-transport.ts";
+import { discoverRustExecutable } from "../discovery.ts";
 
 async function postgresSourceScript() {
   const core = await loadHouseCore();
@@ -354,7 +355,7 @@ export async function recallWithFallback(effectiveRoomDir, room, query) {
 const rustRecallTransports = new Map();
 
 function rustRecallTransport() {
-  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  const executable = discoverRustExecutable();
   if (!executable) return null;
   let transport = rustRecallTransports.get(executable);
   if (!transport) {
@@ -444,7 +445,7 @@ function stripInvalidClusterTelemetry(result) {
 }
 
 export async function recallWithRouting(effectiveRoomDir, room, query, { signal } = {}) {
-  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  const executable = discoverRustExecutable();
   const transport = rustRecallTransport();
   if (!transport) return recallWithFallback(effectiveRoomDir, room, query);
   const params = {

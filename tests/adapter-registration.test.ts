@@ -176,7 +176,7 @@ describe("OMP adapter registration", () => {
     const originalRequest = RustJsonlTransport.prototype.request;
     const originalClose = RustJsonlTransport.prototype.close;
     let closed = 0;
-    process.env.SOLARISAEL_HOUSE_RUST = "shutdown-test";
+    process.env.SOLARISAEL_HOUSE_RUST = process.execPath;
     RustJsonlTransport.prototype.request = async function () {
       return {
         ok: true,
@@ -378,7 +378,7 @@ describe("OMP adapter registration", () => {
     const originalClose = RustJsonlTransport.prototype.close;
     let calls = 0;
     let closed = 0;
-    process.env.SOLARISAEL_HOUSE_RUST = "remember-recovery-test";
+    process.env.SOLARISAEL_HOUSE_RUST = process.execPath;
     RustJsonlTransport.prototype.request = async function () {
       calls += 1;
       if (calls === 1) {
