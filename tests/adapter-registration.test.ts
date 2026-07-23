@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, afterEach } from "bun:test";
 
 import solarisaelHouseProof from "../index.ts";
-
+import { RustJsonlTransport } from "../rust-transport.ts";
+import { closeRustRecallTransports, recallWithRouting } from "../solarisael-house-proof/recall.ts";
 type CapturedTool = {
   name: string;
   parameters: Schema;
@@ -140,7 +141,7 @@ describe("OMP adapter registration", () => {
     const { labels, hooks } = registerAdapter();
 
     expect(labels).toEqual(["Solarisael House"]);
-    expect(hooks.map((hook) => hook.name)).toEqual(["context", "agent_end"]);
+    expect(hooks.map((hook) => hook.name)).toEqual(["context", "shutdown", "agent_end"]);
     expect(hooks.every((hook) => typeof hook.handler === "function")).toBe(true);
   });
 
@@ -148,6 +149,7 @@ describe("OMP adapter registration", () => {
     const { tools } = registerAdapter();
 
     expect(tools).toHaveLength(expectedToolNames.length);
+
     expect(new Set(tools.map((tool) => tool.name))).toEqual(new Set(expectedToolNames));
     expect(toolMap(tools)).toMatchObject({
       recall: { approval: "read" },
@@ -166,6 +168,47 @@ describe("OMP adapter registration", () => {
       house_routing_mode: { approval: "write" },
       house_model_default: { approval: "write" },
     });
+  });
+ 
+  test("closes cached Rust workers through the adapter shutdown hook", async () => {
+    const originalRust = process.env.SOLARISAEL_HOUSE_RUST;
+    const originalRequest = RustJsonlTransport.prototype.request;
+    const originalClose = RustJsonlTransport.prototype.close;
+    let closed = 0;
+    process.env.SOLARISAEL_HOUSE_RUST = "shutdown-test";
+    RustJsonlTransport.prototype.request = async function () {
+      return {
+        ok: true,
+        query: "alpha",
+        found: false,
+        source: "rust-postgres",
+        retrievalCandidates: [],
+        canonMatches: [],
+        semanticChunks: [],
+        contentChunks: [],
+        dateMatches: [],
+        queryDates: [],
+        taxonomy: { memoryTypes: [], threadKeys: ["process"], namedEntities: [] },
+      };
+    };
+    RustJsonlTransport.prototype.close = function () {
+      closed += 1;
+      return originalClose.call(this);
+    };
+    try {
+      await recallWithRouting("room-dir", "example", "alpha");
+      const { hooks } = registerAdapter();
+      const shutdown = hooks.find((hook) => hook.name === "shutdown");
+      expect(shutdown).toBeDefined();
+      shutdown.handler();
+      expect(closed).toBe(1);
+    } finally {
+      closeRustRecallTransports();
+      RustJsonlTransport.prototype.request = originalRequest;
+      RustJsonlTransport.prototype.close = originalClose;
+      if (originalRust === undefined) delete process.env.SOLARISAEL_HOUSE_RUST;
+      else process.env.SOLARISAEL_HOUSE_RUST = originalRust;
+    }
   });
 
   test("exposes the OMP parameter schemas for each registered tool", () => {

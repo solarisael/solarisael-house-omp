@@ -139,6 +139,10 @@ export class RustJsonlTransport {
     return Buffer.concat(this.stderrChunks).toString("utf8");
   }
 
+  get usable(): boolean {
+    return !this.cleaned;
+  }
+
   private ensureStarted(): void {
     if (this.child) return;
     const child = spawn(this.options.executable, this.options.args ?? [], {

@@ -1,7 +1,7 @@
 // Tool registration for the OMP adapter.
 // Silhouette: expose room/substrate tools; keep hook wiring out of tool bodies.
 
-import { compactRecall, recallWithFallback } from "./recall.ts";
+import { compactRecall, recallWithRouting } from "./recall.ts";
 import {
   loadRoomState,
   normalizeSpiritName,
@@ -110,7 +110,7 @@ export function registerSolarisaelTools(pi) {
       const { room, effectiveRoomDir } = roomContext(ctx.cwd);
 
       try {
-        const recalled = await recallWithFallback(effectiveRoomDir, room, params.query);
+        const recalled = await recallWithRouting(effectiveRoomDir, room, params.query, { signal: _signal });
         if (!recalled.ok) {
           return {
             isError: true,

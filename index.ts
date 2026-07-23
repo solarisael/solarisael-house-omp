@@ -6,7 +6,7 @@ export const ADAPTER_API_VERSION = 1;
 // shaped modules under ./solarisael-house-proof/ so this door only wires hooks.
 
 import { isFreshConversation, logUnseenConversationTurns } from "./solarisael-house-proof/conversation-log.ts";
-import { compactRecall, recallWithFallback } from "./solarisael-house-proof/recall.ts";
+import { closeRustRecallTransports, compactRecall, recallWithRouting } from "./solarisael-house-proof/recall.ts";
 import { loadHouseQueryRouting } from "./solarisael-house-proof/core.ts";
 import { resolveEntities } from "./solarisael-house-proof/entity-resolution.ts";
 import { automaticRecallViewport, createRecallViewportSession } from "./solarisael-house-proof/recall-viewport.ts";
@@ -208,7 +208,7 @@ export default function solarisaelHouseProof(pi) {
           recognizedEntities: resolution.matches.map((match) => match.canonicalName),
         });
         if (queryRoute.shouldAutoRecall) {
-          const recalled = await recallWithFallback(effectiveRoomDir, room, queryRoute.recallQuery || prompt);
+          const recalled = await recallWithRouting(effectiveRoomDir, room, queryRoute.recallQuery || prompt);
           if (recalled.ok) {
             const compact = compactRecall(recalled.result);
             const viewportKey = `${ctx?.sessionID || ctx?.sessionId || "session"}:${room}`;
@@ -268,7 +268,7 @@ export default function solarisaelHouseProof(pi) {
               prompt,
               route: queryRoute,
               status: "error",
-              error: recalled.error || "recall failed",
+              error: recalled.result?.error || "recall failed",
             });
           }
         } else {
@@ -310,6 +310,10 @@ export default function solarisaelHouseProof(pi) {
 
     if (!additions.length) return;
     return { messages: [...messages, ...additions] };
+  });
+
+  pi.on("shutdown", () => {
+    closeRustRecallTransports();
   });
 
   pi.on("agent_end", async (event, ctx) => {

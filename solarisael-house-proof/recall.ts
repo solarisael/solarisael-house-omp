@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { loadHouseCore, loadHouseMemory } from "./core.ts";
 import { runWslDiagnostic, substrateConfigurationError, substratePaths, windowsPathToWsl } from "./substrate.ts";
+import { RustJsonlTransport, RustTransportError } from "../rust-transport.ts";
 
 async function postgresSourceScript() {
   const core = await loadHouseCore();
@@ -320,3 +321,110 @@ export async function recallWithFallback(effectiveRoomDir, room, query) {
     },
   };
 }
+
+const rustRecallTransports = new Map();
+
+function rustRecallTransport() {
+  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  if (!executable) return null;
+  let transport = rustRecallTransports.get(executable);
+  if (!transport) {
+    transport = new RustJsonlTransport({ executable });
+    rustRecallTransports.set(executable, transport);
+  }
+  return transport;
+}
+
+function evictRustRecallTransport(executable, transport) {
+  if (rustRecallTransports.get(executable) !== transport) return;
+  rustRecallTransports.delete(executable);
+  transport.close();
+}
+
+export function closeRustRecallTransports() {
+  for (const [executable, transport] of rustRecallTransports) {
+    rustRecallTransports.delete(executable);
+    transport.close();
+  }
+}
+
+const RECALL_TIMEOUT_MS = 15_000;
+
+function stringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function validRustRecallCandidate(candidate) {
+  return candidate && typeof candidate === "object" && !Array.isArray(candidate)
+    && typeof candidate.source_path === "string"
+    && typeof candidate.title === "string"
+    && typeof candidate.heading_path === "string"
+    && typeof candidate.excerpt === "string"
+    && stringArray(candidate.sources)
+    && Number.isFinite(candidate.score)
+    && Number.isFinite(candidate.term_coverage)
+    && stringArray(candidate.matched_terms)
+    && stringArray(candidate.missing_terms)
+    && stringArray(candidate.reasons);
+}
+
+function validRustRecallDateMatch(dateMatch) {
+  return dateMatch && typeof dateMatch === "object" && !Array.isArray(dateMatch)
+    && typeof dateMatch.body_excerpt === "string";
+}
+
+function validRustRecallResult(value, query) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "result must be an object";
+  const result = value;
+  if (result.ok !== true || result.query !== query || typeof result.found !== "boolean" || typeof result.source !== "string") {
+    return "result has invalid ok, query, found, or source";
+  }
+  for (const field of ["retrievalCandidates", "canonMatches", "semanticChunks", "contentChunks", "dateMatches", "queryDates"]) {
+    if (!Array.isArray(result[field])) return `result.${field} must be an array`;
+  }
+  if (result.dateMatches.length > 5) return "result.dateMatches must contain at most 5 entries";
+  if (!result.taxonomy || typeof result.taxonomy !== "object" || Array.isArray(result.taxonomy)) {
+    return "result.taxonomy must be an object";
+  }
+  if (!result.retrievalCandidates.every(validRustRecallCandidate)) {
+    return "result.retrievalCandidates entries must contain the exact compactor candidate fields";
+  }
+  if (!result.dateMatches.every(validRustRecallDateMatch)) {
+    return "result.dateMatches entries must contain a string body_excerpt";
+  }
+  return null;
+}
+
+function rustRecallFailure(error) {
+  if (error instanceof RustTransportError) {
+    return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
+  }
+  return { ok: false, error: error instanceof Error ? error.message : String(error) };
+}
+
+export async function recallWithRouting(effectiveRoomDir, room, query, { signal } = {}) {
+  const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
+  const transport = rustRecallTransport();
+  if (!transport) return recallWithFallback(effectiveRoomDir, room, query);
+  const params = {
+    room,
+    query,
+    semantic_top_k: 8,
+    semantic_min_similarity: 0.50,
+    content_top_k: 8,
+    content_min_similarity: 0.30,
+  };
+  try {
+    const result = await transport.request("recall", params, { signal, timeoutMs: RECALL_TIMEOUT_MS });
+    const validationError = validRustRecallResult(result, query);
+    if (validationError) {
+      evictRustRecallTransport(executable, transport);
+      return { ok: false, result: { ok: false, query, error: `invalid Rust recall result: ${validationError}` } };
+    }
+    return { ok: true, result };
+  } catch (error) {
+    if (!transport.usable) evictRustRecallTransport(executable, transport);
+    return { ok: false, result: { ok: false, query, ...rustRecallFailure(error) } };
+  }
+}
+
