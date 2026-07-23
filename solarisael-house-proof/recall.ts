@@ -143,29 +143,26 @@ export function compactRecall(result, { includeTaxonomy = false } = {}) {
     : [];
   const taxonomy = includeTaxonomy ? compactTaxonomy(result?.taxonomy) : null;
 
-  // Cluster-map drift nudge (2026-07-09): telemetry, not a timer. Fires only
-  // when the substrate measured real drift since the last cluster build —
-  // never built, or >=15% of the retrieval-visible corpus embedded since.
-  const staleness = result?.clusterStaleness;
+  // Cluster telemetry is advisory and fail-open: malformed or absent
+  // substrate fields must never affect the base recall payload.
+  const staleness = validClusterStaleness(result?.clusterStaleness) ? result.clusterStaleness : null;
   const clusterNudge = staleness && (staleness.built_at === null || staleness.fraction_unseen >= 0.15)
-    ? `clusters: ${staleness.built_at === null ? "never built" : `built ${String(staleness.built_at).slice(0, 10)}`}, `
+    ? `clusters: ${staleness.built_at === null ? "never built" : `built ${staleness.built_at.slice(0, 10)}`}, `
       + `${staleness.chunks_since_build} chunks since (${Math.round(staleness.fraction_unseen * 100)}% of corpus unseen) — `
       + `wanna do clusters, dummies? (house/substrate/rebuild_clusters.py)`
     : null;
 
-  // Resonance readout (2026-07-09): substrate telemetry — cosine activation
-  // of this query against memory-cluster centroids, plus dormant-hot chunk
-  // pointers. What the memory space finds NEAR the conversation; never
-  // model-internal state. Telemetry, not testimony.
-  const resonance = result?.clusterResonance && Array.isArray(result.clusterResonance.profile)
+  // Resonance is similarly advisory. Keep the existing eight-profile/three-hot
+  // bounds, but never serialize partially malformed telemetry.
+  const resonance = validClusterResonance(result?.clusterResonance)
     ? {
       note: "substrate resonance: what the memory space finds near this query — telemetry, not model-internal state",
       profile: result.clusterResonance.profile.slice(0, 8).map((p) => ({
-        label: p?.label,
-        activation: p?.activation,
-        members: p?.member_count,
+        label: p.label,
+        activation: p.activation,
+        members: p.member_count,
       })),
-      dormantHot: Array.isArray(result.clusterResonance.hot) ? result.clusterResonance.hot.slice(0, 3) : [],
+      dormantHot: result.clusterResonance.hot.slice(0, 3),
     }
     : null;
 
@@ -193,6 +190,38 @@ export function compactRecall(result, { includeTaxonomy = false } = {}) {
     } : {}),
   };
 }
+
+function validClusterStaleness(value) {
+  const builtAtValid = value?.built_at === null
+    || (typeof value?.built_at === "string" && Number.isFinite(Date.parse(value.built_at)));
+  return value && typeof value === "object" && !Array.isArray(value)
+    && builtAtValid
+    && Number.isInteger(value.chunks_since_build) && value.chunks_since_build >= 0
+    && Number.isFinite(value.fraction_unseen) && value.fraction_unseen >= 0 && value.fraction_unseen <= 1;
+}
+
+function validClusterHot(value) {
+  if (typeof value === "string") return value.length > 0;
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Number.isInteger(value.cluster_id) && value.cluster_id >= 0
+    && typeof value.label === "string"
+    && Array.isArray(value.chunks)
+    && value.chunks.every((chunk) => chunk && typeof chunk === "object" && !Array.isArray(chunk)
+      && typeof chunk.source_path === "string"
+      && (chunk.heading_path === null || typeof chunk.heading_path === "string")
+      && Number.isFinite(chunk.sim) && chunk.sim >= -1 && chunk.sim <= 1);
+}
+
+function validClusterResonance(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Array.isArray(value.profile) && value.profile.length > 0
+    && value.profile.every((entry) => entry && typeof entry === "object" && !Array.isArray(entry)
+      && typeof entry.label === "string" && entry.label.length > 0
+      && Number.isFinite(entry.activation) && entry.activation >= -1 && entry.activation <= 1
+      && Number.isInteger(entry.member_count) && entry.member_count >= 0)
+    && Array.isArray(value.hot) && value.hot.every(validClusterHot);
+}
+
 
 async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
   const sourceScript = await postgresSourceScript();
@@ -402,6 +431,18 @@ function rustRecallFailure(error) {
   return { ok: false, error: error instanceof Error ? error.message : String(error) };
 }
 
+function stripInvalidClusterTelemetry(result) {
+  if (!result || typeof result !== "object") return result;
+  const safe = { ...result };
+  if (safe.clusterStaleness !== undefined && !validClusterStaleness(safe.clusterStaleness)) {
+    delete safe.clusterStaleness;
+  }
+  if (safe.clusterResonance !== undefined && !validClusterResonance(safe.clusterResonance)) {
+    delete safe.clusterResonance;
+  }
+  return safe;
+}
+
 export async function recallWithRouting(effectiveRoomDir, room, query, { signal } = {}) {
   const executable = String(process.env.SOLARISAEL_HOUSE_RUST || "").trim();
   const transport = rustRecallTransport();
@@ -421,7 +462,7 @@ export async function recallWithRouting(effectiveRoomDir, room, query, { signal 
       evictRustRecallTransport(executable, transport);
       return { ok: false, result: { ok: false, query, error: `invalid Rust recall result: ${validationError}` } };
     }
-    return { ok: true, result };
+    return { ok: true, result: stripInvalidClusterTelemetry(result) };
   } catch (error) {
     if (!transport.usable) evictRustRecallTransport(executable, transport);
     return { ok: false, result: { ok: false, query, ...rustRecallFailure(error) } };

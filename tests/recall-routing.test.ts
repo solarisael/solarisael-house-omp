@@ -141,6 +141,31 @@ describe("Rust recall routing", () => {
       result: { ok: false, query: "alpha", error: "database down", code: "postgres_unavailable", retryable: false },
     });
   });
+  test("preserves valid cluster telemetry while stripping malformed advisory fields", async () => {
+    RustJsonlTransport.prototype.request = async function () {
+      return {
+        ...result("alpha"),
+        clusterStaleness: { built_at: "2026-07-01T00:00:00Z", chunks_since_build: 4, fraction_unseen: 0.2 },
+        clusterResonance: {
+          profile: [{ cluster_id: 1, label: "alpha", member_count: 3, activation: 0.8 }],
+          hot: [{ cluster_id: 1, label: "alpha", chunks: [{ source_path: "memory/a.md", heading_path: null, sim: 0.7 }] }],
+        },
+      };
+    };
+    const valid = await recallWithRouting("room-dir", "example", "alpha");
+    expect(valid).toMatchObject({ ok: true, result: { clusterStaleness: { fraction_unseen: 0.2 }, clusterResonance: { profile: [{ label: "alpha" }] } } });
+
+    RustJsonlTransport.prototype.request = async function () {
+      return {
+        ...result("alpha"),
+        clusterStaleness: { built_at: "not-a-date", chunks_since_build: -1, fraction_unseen: 4 },
+        clusterResonance: { profile: [{ label: "bad", member_count: "3", activation: NaN }], hot: [{ cluster_id: 1, label: "bad", chunks: [{ source_path: "memory/a.md", heading_path: 42, sim: 0.7 }] }] },
+      };
+    };
+    const malformed = await recallWithRouting("room-dir", "example", "alpha");
+    expect(malformed).toEqual({ ok: true, result: result("alpha") });
+  });
+
 });
 
 test("manual and automatic consumers use the single routing seam", async () => {
