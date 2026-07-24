@@ -6,10 +6,24 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { currentRustPlatform, discoverRustExecutable, rustBinaryName } from "./discovery.ts";
 import { substrateHealth } from "./solarisael-house-proof/substrate.ts";
 
+type Diagnostic = {
+  category: string;
+  stage: string;
+  operation: string;
+  owner: { component: string; path: string; symbol: string };
+  expected: Record<string, unknown>;
+  observed: Record<string, unknown>;
+  evidence: Array<Record<string, unknown>>;
+  targets: Array<Record<string, unknown>>;
+  next_checks: Array<Record<string, unknown>>;
+  execution: { request_dispatched: boolean; write_outcome: "not_started"; retry: "safe_now" | "after_change" };
+};
+
 type Check = {
   name: string;
   ok: boolean;
   detail: string;
+  diagnostic?: Diagnostic;
 };
 
 type CompatibilityContract = Record<string, unknown>;
@@ -45,9 +59,45 @@ function validDisplayName(value: unknown) {
     && value.trim().length <= 80
     && !/[\r\n|]/.test(value);
 }
+function add(checks: Check[], name: string, ok: boolean, detail: string, diagnostic?: Diagnostic) {
+  checks.push({ name, ok, detail, diagnostic });
+}
 
-function add(checks: Check[], name: string, ok: boolean, detail: string) {
-  checks.push({ name, ok, detail });
+function redacted(value: unknown) {
+  return String(value ?? "")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1[redacted]@")
+    .replace(/\b[\w.-]+:[^@\\/\s]+@/g, "[redacted]@")
+    .replace(/\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*\S+/gi, "$1: [redacted]");
+}
+
+function checkDiagnostic(check: Check): Diagnostic {
+  const lower = check.name.toLowerCase();
+  const category = /rust/.test(lower) ? "configuration"
+    : /compatibility|api|schema/.test(lower) ? "protocol"
+    : /substrate|config/.test(lower) ? "configuration"
+    : "operation";
+  const target = /rust/.test(lower)
+    ? { kind: "environment", name: "SOLARISAEL_HOUSE_RUST" }
+    : /config/.test(lower)
+      ? { kind: "file", path: configPath }
+      : /compatibility|api|schema/.test(lower)
+        ? { kind: "file", path: contractPath || "compatibility.json" }
+        : { kind: "source", path: "verify-install.ts", symbol: check.name };
+  return {
+    category,
+    stage: category === "protocol" ? "validation" : "configuration_load",
+    operation: "verify_install",
+    owner: { component: "solarisael-house-omp", path: "verify-install.ts", symbol: "main" },
+    expected: { check: check.name, ok: true },
+    observed: { check: check.name, ok: false, detail: redacted(check.detail) },
+    evidence: [{ source: "verify-install.ts", check: check.name, detail: redacted(check.detail) }],
+    targets: [target],
+    next_checks: [
+      { action: category === "protocol" ? "validate_compatibility_contract" : "inspect_configuration", target },
+      { action: "rerun_verify_install", target: { path: "verify-install.ts" } },
+    ],
+    execution: { request_dispatched: false, write_outcome: "not_started", retry: "after_change" },
+  };
 }
 
 function readJson(filePath: string): CompatibilityContract {
@@ -55,6 +105,16 @@ function readJson(filePath: string): CompatibilityContract {
 }
 
 function verifyRustBundle(checks: Check[]): void {
+  const rustRequested = Boolean(String(process.env.SOLARISAEL_HOUSE_RUST || "").trim())
+    || process.env.SOLARISAEL_HOUSE_RUST_AUTO === "1";
+  if (rustRequested) {
+    try {
+      const executable = discoverRustExecutable({ moduleDir: adapterRoot });
+      add(checks, "Rust executable selection", Boolean(executable), executable || "no executable was found for the requested Rust selection");
+    } catch (error) {
+      add(checks, "Rust executable selection", false, error instanceof Error ? error.message : String(error));
+    }
+  }
   const manifestPath = path.join(adapterRoot, "rust-manifest.json");
   if (!existsSync(manifestPath)) return;
   let manifest: any;
@@ -186,6 +246,13 @@ if (substrateConfigured) {
       add(checks, "compatibility contract JSON", false, error instanceof Error ? error.message : String(error));
     }
   }
+  const schemaOk = compatibilityContract?.format === 1 && compatibilityContract?.schemaVersion === 1;
+  add(
+    checks,
+    "compatibility schema",
+    schemaOk,
+    `expected format=1 schemaVersion=1; got format=${String(compatibilityContract?.format)} schemaVersion=${String(compatibilityContract?.schemaVersion)}`,
+  );
 
   const substrateApiOk = compatibilityContract?.substrateApi === 1;
   const coreApiOk = coreApiVersion === 1 && compatibilityContract?.coreApi === coreApiVersion;
@@ -193,7 +260,7 @@ if (substrateConfigured) {
   add(checks, "substrate API compatibility", substrateApiOk, `expected 1, got ${String(compatibilityContract?.substrateApi)}`);
   add(checks, "core API compatibility", coreApiOk, `expected ${String(coreApiVersion)}, got ${String(compatibilityContract?.coreApi)}`);
   add(checks, "adapter API compatibility", adapterApiOk, `expected ${String(adapterApiVersion)}, got ${String(compatibilityContract?.adapterApi)}`);
-  compatibleApis = substrateApiOk && coreApiOk && adapterApiOk;
+  compatibleApis = schemaOk && substrateApiOk && coreApiOk && adapterApiOk;
 
   const verdict = await substrateHealth(coreRoot);
   const healthy = verdict.ok === true && verdict.mode === "full" && verdict.substrateApi === 1;
@@ -271,6 +338,10 @@ verifyRustBundle(checks);
 verifyPortableManifest(checks);
 
 const staticFailed = checks.filter((check) => !check.ok && check.name !== "substrate runtime health");
+const diagnostics: Diagnostic[] = [
+  ...checks.filter((check) => !check.ok).map((check) => check.diagnostic || checkDiagnostic(check)),
+  ...(Array.isArray(runtimeHealth.verdict?.diagnostics) ? runtimeHealth.verdict.diagnostics as Diagnostic[] : []),
+];
 const mode: VerificationMode = !substrateConfigured
   ? "Base"
   : staticFailed.length === 0 && compatibleApis && runtimeHealth.ok === true
@@ -298,6 +369,7 @@ const result = {
       : null,
   },
   runtimeHealth,
+  diagnostics,
   checks,
   next: mode === "Full"
     ? "Start a fresh OMP session from the room directory and call room_state."

@@ -12,6 +12,63 @@ import {
   WRITE_TIMEOUT_MS,
 } from "./constants.ts";
 
+const DIAGNOSTIC_OWNER = {
+  component: "solarisael-house-omp",
+  path: "solarisael-house-proof/substrate.ts",
+  symbol: "substrateHealth",
+};
+
+function redactText(value) {
+  return String(value || "")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1[redacted]@")
+    .replace(/\b[\w.-]+:[^@\\/\s]+@/g, "[redacted]@")
+    .replace(/\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*\S+/gi, "$1: [redacted]");
+}
+
+function redactValue(value) {
+  if (typeof value === "string") return redactText(value);
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key,
+    /(?:token|password|secret|authorization|api[_-]?key|database_url|connection_string)/i.test(key)
+      ? "[redacted]"
+      : redactValue(item),
+  ]));
+}
+
+function diagnostic({ category, stage, expected, observed, evidence, targets, nextChecks, retry = "after_change" }) {
+  return {
+    category,
+    stage,
+    operation: "substrate_health",
+    owner: DIAGNOSTIC_OWNER,
+    expected: redactValue(expected),
+    observed: redactValue(observed),
+    evidence: redactValue(evidence),
+    targets,
+    next_checks: nextChecks,
+    execution: {
+      request_dispatched: false,
+      write_outcome: "not_started",
+      retry,
+    },
+  };
+}
+
+function healthDiagnostic({ category = "configuration", stage = "configuration_load", expected, observed, evidence, targets, nextChecks, retry }) {
+  return diagnostic({
+    category,
+    stage,
+    expected,
+    observed,
+    evidence,
+    targets,
+    nextChecks,
+    retry,
+  });
+}
+
 
 export function windowsPathToWsl(value) {
   const source = String(value || "").replace(/\\/g, "/");
@@ -49,15 +106,18 @@ export function substratePaths(sharedRoot) {
   };
 }
 
-function substrateDegraded({ configured, dir, reason, degradedReasons = [] }) {
+function substrateDegraded({ configured, dir, reason, degradedReasons = [], diagnostics = [] }) {
+  const safeReason = redactText(reason);
+  const safeReasons = degradedReasons.map(redactText);
   return {
     ok: configured ? false : null,
     configured,
     mode: configured ? "degraded" : "base",
     substrateApi: null,
-    path: configured ? dir : null,
-    reason,
-    degradedReasons,
+    path: configured ? redactText(dir) : null,
+    reason: safeReason,
+    degradedReasons: safeReasons,
+    diagnostics,
   };
 }
 
@@ -83,44 +143,78 @@ async function pathAccessError(target) {
  */
 export async function substrateHealth(sharedRoot, timeoutMs = DIAGNOSTIC_TIMEOUT_MS) {
   const configuredPath = String(process.env.SOLARISAEL_SUBSTRATE || "").trim();
+  const configTarget = { kind: "environment", name: "SOLARISAEL_SUBSTRATE" };
+  const degraded = ({ dir, reason, degradedReasons = [], diagnostic: entry }) => substrateDegraded({
+    configured: true,
+    dir,
+    reason,
+    degradedReasons,
+    diagnostics: [entry],
+  });
   if (!configuredPath) {
     return substrateDegraded({
       configured: false,
       dir: null,
       reason: "SOLARISAEL_SUBSTRATE is not configured",
+      diagnostics: [healthDiagnostic({
+        expected: { configured: false, mode: "base" },
+        observed: { configured: false },
+        evidence: [{ source: "environment", state: "missing", name: "SOLARISAEL_SUBSTRATE" }],
+        targets: [configTarget],
+        nextChecks: [{ action: "configure_optional_substrate", target: configTarget }],
+        retry: "after_change",
+      })],
     });
   }
   const configurationError = substrateConfigurationError();
   if (configurationError) {
-    return substrateDegraded({
-      configured: true,
+    return degraded({
       dir: configuredPath,
       reason: configurationError,
       degradedReasons: [configurationError],
+      diagnostic: healthDiagnostic({
+        expected: { path: "absolute filesystem path" },
+        observed: { path: redactText(configuredPath), absolute: false },
+        evidence: [{ source: "environment", name: "SOLARISAEL_SUBSTRATE", state: "present" }],
+        targets: [configTarget],
+        nextChecks: [{ action: "set_absolute_path", target: configTarget }],
+      }),
     });
   }
 
   const { dir, health } = substratePaths(sharedRoot);
   const dirError = await pathAccessError(dir);
   if (dirError) {
-    const detail = errorMessage(dirError);
-    return substrateDegraded({
-      configured: true,
+    const missing = dirError.code === "ENOENT";
+    const reason = missing ? `configured substrate path is missing: ${dir}` : `configured substrate path is unavailable: ${dir} (${errorMessage(dirError)})`;
+    return degraded({
       dir,
-      reason: dirError.code === "ENOENT"
-        ? `configured substrate path is missing: ${dir}`
-        : `configured substrate path is unavailable: ${dir} (${detail})`,
+      reason,
+      diagnostic: healthDiagnostic({
+        category: "filesystem",
+        expected: { directory: dir, accessible: true },
+        observed: { directory: dir, accessible: false, error: errorMessage(dirError) },
+        evidence: [{ source: "filesystem", code: dirError.code || "unknown", target: dir }],
+        targets: [{ kind: "directory", path: dir }, configTarget],
+        nextChecks: [{ action: missing ? "create_or_select_substrate" : "repair_filesystem_access", target: { path: dir } }],
+      }),
     });
   }
   const healthError = await pathAccessError(health);
   if (healthError) {
-    const detail = errorMessage(healthError);
-    return substrateDegraded({
-      configured: true,
+    const missing = healthError.code === "ENOENT";
+    const reason = missing ? `configured substrate health script is missing: ${health}` : `configured substrate health script is unavailable: ${health} (${errorMessage(healthError)})`;
+    return degraded({
       dir,
-      reason: healthError.code === "ENOENT"
-        ? `configured substrate health script is missing: ${health}`
-        : `configured substrate health script is unavailable: ${health} (${detail})`,
+      reason,
+      diagnostic: healthDiagnostic({
+        category: "filesystem",
+        expected: { file: health, accessible: true },
+        observed: { file: health, accessible: false, error: errorMessage(healthError) },
+        evidence: [{ source: "filesystem", code: healthError.code || "unknown", target: health }],
+        targets: [{ kind: "file", path: health }, configTarget],
+        nextChecks: [{ action: missing ? "restore_health_script" : "repair_filesystem_access", target: { path: health } }],
+      }),
     });
   }
 
@@ -129,24 +223,23 @@ export async function substrateHealth(sharedRoot, timeoutMs = DIAGNOSTIC_TIMEOUT
   try {
     probe = await runWslDiagnostic({ argv, stdin: "", timeoutMs });
   } catch (error) {
-    return substrateDegraded({
-      configured: true,
-      dir,
-      reason: `health.py launch failed: ${errorMessage(error)}`,
-    });
+    probe = { spawnError: errorMessage(error), timedOut: false, code: null, stdout: "", stderr: "" };
   }
-  if (probe.timedOut) {
-    return substrateDegraded({
-      configured: true,
+  if (probe.timedOut || probe.spawnError) {
+    const reason = probe.timedOut ? "health.py timed out" : `health.py launch failed: ${probe.spawnError}`;
+    return degraded({
       dir,
-      reason: "health.py timed out",
-    });
-  }
-  if (probe.spawnError) {
-    return substrateDegraded({
-      configured: true,
-      dir,
-      reason: `health.py launch failed: ${probe.spawnError}`,
+      reason,
+      diagnostic: healthDiagnostic({
+        category: "operation",
+        stage: "startup",
+        expected: { command: "python3 health.py", timeoutMs },
+        observed: { timedOut: Boolean(probe.timedOut), spawned: !probe.spawnError, exitCode: probe.code },
+        evidence: [{ source: "process", stderr: redactText(String(probe.stderr || "")).slice(0, 512) }],
+        targets: [{ kind: "script", path: health }, { kind: "service", name: "wsl.exe" }],
+        nextChecks: [{ action: "run_health_command", target: { argv } }, { action: "verify_python_runtime", target: { command: "python3" } }],
+        retry: "safe_now",
+      }),
     });
   }
 
@@ -155,17 +248,33 @@ export async function substrateHealth(sharedRoot, timeoutMs = DIAGNOSTIC_TIMEOUT
   try {
     verdict = JSON.parse(raw);
   } catch (error) {
-    return substrateDegraded({
-      configured: true,
+    return degraded({
       dir,
       reason: `health.py returned malformed JSON: ${errorMessage(error)}`,
+      diagnostic: healthDiagnostic({
+        category: "protocol",
+        stage: "response_encode",
+        expected: { json: "health verdict object" },
+        observed: { stdoutBytes: raw.length, exitCode: probe.code },
+        evidence: [{ source: "process", stderr: redactText(String(probe.stderr || "")).slice(0, 512) }],
+        targets: [{ kind: "script", path: health }],
+        nextChecks: [{ action: "run_health_command", target: { path: health } }, { action: "validate_health_json", target: { path: health } }],
+      }),
     });
   }
   if (!verdict || typeof verdict !== "object" || Array.isArray(verdict)) {
-    return substrateDegraded({
-      configured: true,
+    return degraded({
       dir,
       reason: "health.py returned an invalid JSON verdict",
+      diagnostic: healthDiagnostic({
+        category: "protocol",
+        stage: "response_encode",
+        expected: { type: "object" },
+        observed: { type: Array.isArray(verdict) ? "array" : typeof verdict },
+        evidence: [{ source: "health.py", exitCode: probe.code }],
+        targets: [{ kind: "script", path: health }],
+        nextChecks: [{ action: "validate_health_json", target: { path: health } }],
+      }),
     });
   }
 
@@ -176,35 +285,43 @@ export async function substrateHealth(sharedRoot, timeoutMs = DIAGNOSTIC_TIMEOUT
   const full = verdict.ok === true && verdict.mode === "full" && apiCompatible;
   if (full) {
     return {
-      ...verdict,
+      ...redactValue(verdict),
       ok: true,
       configured: true,
       mode: "full",
       path: dir,
       reason: null,
-      degradedReasons: reportedReasons,
+      degradedReasons: reportedReasons.map(redactText),
+      diagnostics: [],
     };
   }
 
   let reason = reportedReasons.join("; ");
-  if (!apiCompatible) {
-    reason = `substrate API mismatch: health.py reported ${String(verdict.substrateApi)}, expected 1`;
-  } else if (!reason && verdict.mode !== "full") {
-    reason = `health.py reported mode ${String(verdict.mode)}, expected full`;
-  } else if (!reason && verdict.ok !== true) {
-    reason = "health.py reported an unhealthy substrate";
-  } else if (!reason) {
-    reason = "health.py returned an incomplete full-mode verdict";
-  }
-  return {
-    ...verdict,
-    ok: false,
-    configured: true,
-    mode: "degraded",
-    path: dir,
+  if (!apiCompatible) reason = `substrate API mismatch: health.py reported ${String(verdict.substrateApi)}, expected 1`;
+  else if (!reason && verdict.mode !== "full") reason = `health.py reported mode ${String(verdict.mode)}, expected full`;
+  else if (!reason && verdict.ok !== true) reason = "health.py reported an unhealthy substrate";
+  else if (!reason) reason = "health.py returned an incomplete full-mode verdict";
+  const lower = reason.toLowerCase();
+  const category = /embed|model|vector/.test(lower) ? "embedding" : /database|postgres|sqlite|sql/.test(lower) ? "database" : !apiCompatible ? "protocol" : "operation";
+  const stage = category === "embedding" ? "embedding_request" : category === "database" ? "database_connect" : category === "protocol" ? "validation" : "startup";
+  return degraded({
+    dir,
     reason,
     degradedReasons: reportedReasons.length ? reportedReasons : [reason],
-  };
+    diagnostic: healthDiagnostic({
+      category,
+      stage,
+      expected: { ok: true, mode: "full", substrateApi: 1 },
+      observed: { ok: verdict.ok === true, mode: verdict.mode, substrateApi: verdict.substrateApi, degradedReasons: reportedReasons },
+      evidence: [{ source: "health.py", exitCode: probe.code, reason: redactText(reason) }],
+      targets: [{ kind: "script", path: health }, category === "database" ? { kind: "service", name: "database" } : category === "embedding" ? { kind: "service", name: "embedding" } : { kind: "contract", path: "compatibility.json" }],
+      nextChecks: [
+        { action: category === "database" ? "verify_database_connectivity" : category === "embedding" ? "verify_embedding_provider" : "validate_health_contract", target: { path: health } },
+        { action: "rerun_substrate_health", target: { path: health } },
+      ],
+      retry: "after_change",
+    }),
+  });
 }
 
 

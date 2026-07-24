@@ -102,14 +102,36 @@ describe("optional substrate health", () => {
   test("claims Full mode only for a healthy compatible verdict", async () => {
     const dir = await makeSubstrate(JSON.stringify({ ok: true, mode: "full", substrateApi: 1, degradedReasons: [] }));
     const result = await substrateHealth("C:/unused");
-    expect(result).toMatchObject({ ok: true, configured: true, mode: "full", substrateApi: 1, path: dir, reason: null });
+    expect(result).toMatchObject({ ok: true, configured: true, mode: "full", substrateApi: 1, path: dir, reason: null, diagnostics: [] });
   });
 
-  test("preserves an explicit degraded health reason", async () => {
+  test("reports database refusal with an actionable database diagnostic", async () => {
     await makeSubstrate(JSON.stringify({ ok: false, mode: "degraded", substrateApi: 1, degradedReasons: ["database is unavailable"] }), 1);
     const result = await substrateHealth("C:/unused");
     expect(result).toMatchObject({ ok: false, configured: true, mode: "degraded", reason: "database is unavailable" });
     expect(result.degradedReasons).toEqual(["database is unavailable"]);
+    expect(result.diagnostics[0]).toMatchObject({
+      category: "database",
+      stage: "database_connect",
+      owner: { path: "solarisael-house-proof/substrate.ts", symbol: "substrateHealth" },
+      expected: { ok: true, mode: "full", substrateApi: 1 },
+      execution: { request_dispatched: false, write_outcome: "not_started", retry: "after_change" },
+    });
+  });
+
+  test("classifies embedding degradation and redacts reported secrets", async () => {
+    await makeSubstrate(JSON.stringify({
+      ok: false,
+      mode: "degraded",
+      substrateApi: 1,
+      degradedReasons: ["embedding provider token=secret-value at postgres://user:password@private.example/db"],
+    }), 1);
+    const result = await substrateHealth("C:/unused");
+    const serialized = JSON.stringify(result);
+    expect(result.diagnostics[0]).toMatchObject({ category: "embedding", stage: "embedding_request" });
+    expect(result.diagnostics[0].next_checks).toHaveLength(2);
+    expect(serialized).not.toContain("secret-value");
+    expect(serialized).not.toContain("password");
   });
 
   test("reports malformed JSON as degraded", async () => {
