@@ -1,8 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import path from "node:path";
-import { JsonObject, RustJsonlTransport, RustTransportError } from "../rust-transport.ts";
+import { JsonObject, RustJsonlTransport, RustTransportError, RustTransportOutcomeUnknownError, TransportUnavailableError } from "../rust-transport.ts";
 
 const fixture = `
 const mode = process.argv[2];
@@ -20,6 +22,8 @@ rl.on("line", (line) => {
   else if (mode === "duplicate") { const response = JSON.stringify({ protocol: 1, id: request.id, result: true }) + "\\n"; process.stdout.write(response + response); }
   else if (mode === "out-of-order") { setTimeout(() => process.stdout.write(JSON.stringify({ protocol: 1, id: request.id, result: request.params.value }) + "\\n"), request.params.delay); }
   else if (mode === "exit") process.exit(0);
+  else if (mode === "exit-with-stderr") process.stderr.write("token=topsecret diagnostic tail\\n", () => process.exit(23));
+  else if (mode === "signal") process.stderr.write("worker received signal\\n", () => process.kill(process.pid, "SIGTERM"));
   else if (mode === "stderr") { process.stderr.write("diagnostic\\n"); }
 });
 `;
@@ -41,12 +45,23 @@ describe("Rust JSONL transport", () => {
     client.close();
   }));
 
-  test("propagates structured errors and bounded stderr", async () => withFixture("error", async (file) => {
+  test("propagates structured errors, bounded stderr, and compatibility fields", async () => withFixture("error", async (file) => {
     const client = new RustJsonlTransport({ executable: process.execPath, args: [file, "error"], stderrLimitBytes: 8 });
-    const promise = client.request("remember", { value: 1 });
-    const error = await promise.catch((e) => e);
-    expect(error).toMatchObject({ code: "NOPE", message: "nope", retryable: true, details: { value: 3 } });
+    const error = await client.request("remember", { value: 1 }).catch((reason) => reason);
+    expect(error).toMatchObject({
+      code: "NOPE",
+      message: "nope",
+      retryable: true,
+      details: {
+        value: 3,
+        category: "operation",
+        operation: "remember",
+        owner: { component: "RustJsonlTransport", path: "rust-transport.ts", symbol: "RustJsonlTransport" },
+        execution: { request_dispatched: true, write_outcome: "unknown", retry: "safe_now" },
+      },
+    });
     expect(error.stderr).toBe("diagnost");
+    expect(error.details.observed.request).toEqual({ id: "1", method: "remember", dispatched: true });
     expect(error instanceof RustTransportError).toBe(true);
     client.close();
   }));
@@ -74,9 +89,21 @@ describe("Rust JSONL transport", () => {
     client.close();
   }));
 
-  test("rejects oversized unterminated output", async () => withFixture("oversized", async (file) => {
+  test("bounds oversized output without exposing its content", async () => withFixture("oversized", async (file) => {
     const client = transport(file, "oversized");
-    await expect(client.request("remember", {})).rejects.toThrow("exceeds maximum");
+    const error = await client.request("remember", {}).catch((reason) => reason);
+    expect(error).toMatchObject({
+      code: "RUST_TRANSPORT_OUTPUT_TOO_LARGE",
+      message: expect.stringContaining("exceeds maximum"),
+      retryable: false,
+      details: {
+        category: "protocol",
+        stage: "request_parse",
+        execution: { request_dispatched: true, write_outcome: "unknown", retry: "after_change" },
+      },
+    });
+    expect(error.details.expected).toEqual({ stdout_line_bytes_at_most: 1024 * 1024 });
+    expect(error.details.observed).toMatchObject({ stdout_content: "omitted", request: { id: "1", method: "remember", dispatched: true } });
   }));
 
   test("validates timeout before spawning and rejects overflow", async () => withFixture("success", async (file) => {
@@ -114,10 +141,19 @@ describe("Rust JSONL transport", () => {
 
     const preAborted = new AbortController();
     preAborted.abort();
-    await expect(client.request("remember", { value: "not-sent" }, {
+    const error = await client.request("remember", { value: "not-sent" }, {
       signal: preAborted.signal,
       settleDefinitively: true,
-    })).rejects.toThrow("cancelled");
+    }).catch((reason) => reason);
+    expect(error).toMatchObject({
+      code: "RUST_TRANSPORT_REQUEST_CANCELLED",
+      message: "Rust transport request was cancelled",
+      retryable: true,
+      details: {
+        operation: "remember",
+        execution: { request_dispatched: false, write_outcome: "not_started", retry: "safe_now" },
+      },
+    });
     await new Promise((resolve) => setTimeout(resolve, 10));
     const records = await Bun.file(recordFile).exists() ? await Bun.file(recordFile).text() : "";
     expect(records).not.toContain("not-sent");
@@ -125,7 +161,7 @@ describe("Rust JSONL transport", () => {
     await rm(recordFile, { force: true });
   }));
 
-  test("definitive timeout reports unknown outcome and evicts the worker", async () => withFixture("delayed", async (file) => {
+  test("definitive timeout reports unknown outcome, reconciliation, and evicts the worker", async () => withFixture("delayed", async (file) => {
     const client = transport(file, "delayed");
     const started = performance.now();
     const response = client.request("remember", { value: "uncertain" }, {
@@ -134,11 +170,33 @@ describe("Rust JSONL transport", () => {
     });
     const error = await response.catch((reason) => reason);
     const elapsed = performance.now() - started;
-    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(RustTransportOutcomeUnknownError);
+    expect(error).toMatchObject({
+      code: "AUTHORITATIVE_OUTCOME_UNKNOWN",
+      retryable: false,
+      details: {
+        category: "transport",
+        stage: "request_parse",
+        operation: "remember",
+        owner: { component: "RustJsonlTransport", path: "rust-transport.ts", symbol: "RustJsonlTransport" },
+        execution: { request_dispatched: true, write_outcome: "unknown", retry: "reconcile_first" },
+      },
+    });
     expect(error.message).toContain("authoritative outcome is unknown");
+    expect(error.details.observed).toMatchObject({
+      request: { id: "1", method: "remember", dispatched: true },
+      timeout: "after_dispatch",
+      transport_failure_code: "RUST_TRANSPORT_REQUEST_TIMEOUT",
+    });
     expect(elapsed).toBeLessThan(250);
     expect(client.usable).toBe(false);
-    await expect(client.request("remember", { value: "must-not-reuse" })).rejects.toThrow("unusable");
+    const unavailable = await client.request("remember", { value: "must-not-reuse" }).catch((reason) => reason);
+    expect(unavailable).toMatchObject({
+      code: "AUTHORITATIVE_OUTCOME_UNKNOWN",
+      message: expect.stringContaining("unusable"),
+      retryable: false,
+      details: { execution: { request_dispatched: false, write_outcome: "not_started", retry: "reconcile_first" } },
+    });
   }));
 
   test("bounds concurrent pending requests", async () => withFixture("out-of-order", async (file) => {
@@ -161,6 +219,27 @@ describe("Rust JSONL transport", () => {
     await expect(timeoutClient.request("remember", {})).rejects.toThrow("timed out");
   }));
 
+  test("marks post-dispatch cancellation as safely retryable", async () => withFixture("delayed", async (file) => {
+    const client = transport(file, "delayed");
+    const controller = new AbortController();
+    const response = client.request("remember", { value: "cancelled-after-write" }, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 5);
+    const error = await response.catch((reason) => reason);
+    expect(error).toMatchObject({
+      code: "RUST_TRANSPORT_REQUEST_CANCELLED",
+      message: "Rust transport request was cancelled",
+      retryable: true,
+      details: {
+        operation: "remember",
+        observed: {
+          cancellation: "after_dispatch",
+          request: { id: "1", method: "remember", dispatched: true },
+        },
+        execution: { request_dispatched: true, write_outcome: "unknown", retry: "safe_now" },
+      },
+    });
+  }));
+
   test("correlates concurrent out-of-order responses and rejects duplicates", async () => withFixture("out-of-order", async (file) => {
     const client = transport(file, "out-of-order");
     const first = client.request("remember", { value: "slow", delay: 25 });
@@ -169,10 +248,58 @@ describe("Rust JSONL transport", () => {
     client.close();
   }));
 
-  test("child exit rejects pending requests", async () => withFixture("exit", async (file) => {
-    const client = transport(file, "exit");
-    await expect(client.request("remember", {})).rejects.toThrow("child exited");
-    await expect(client.request("remember", {})).rejects.toThrow("child exited");
+  test("reports child exit code and bounded, redacted stderr evidence", async () => withFixture("exit-with-stderr", async (file) => {
+    const client = new RustJsonlTransport({
+      executable: process.execPath,
+      args: [file, "exit-with-stderr"],
+      stderrLimitBytes: 16,
+    });
+    const error = await client.request("remember", {}).catch((reason) => reason);
+    expect(error).toBeInstanceOf(TransportUnavailableError);
+    expect(error).toMatchObject({
+      code: "RUST_TRANSPORT_CHILD_EXITED",
+      message: "Rust transport child exited (23)",
+      retryable: true,
+      details: {
+        category: "transport",
+        stage: "request_parse",
+        operation: "remember",
+        observed: {
+          exit_code: 23,
+          signal: null,
+          request: { id: "1", method: "remember", dispatched: true },
+          stderr: { bytes_collected: 16, limit_bytes: 16, truncated: true },
+        },
+        execution: { request_dispatched: true, write_outcome: "unknown", retry: "safe_now" },
+      },
+    });
+    expect(error.details.evidence).toContainEqual(expect.objectContaining({ type: "process_exit", exit_code: 23, signal: null }));
+    expect(error.details.evidence).toContainEqual(expect.objectContaining({ type: "stderr", limit_bytes: 16, truncated: true }));
+    expect(error.stderr).not.toContain("topsecret");
+    expect(Buffer.byteLength(error.stderr)).toBeLessThanOrEqual(16);
+  }));
+
+
+  test("reports spawn targets and pre-dispatch state", async () => withFixture("success", async (file) => {
+    const cwd = path.dirname(file);
+    const executable = path.join(cwd, "missing-rust-transport");
+    const client = new RustJsonlTransport({ executable, cwd });
+    const error = await client.request("remember", { value: "not-sent" }).catch((reason) => reason);
+    expect(error).toBeInstanceOf(TransportUnavailableError);
+    expect(error).toMatchObject({
+      code: "RUST_TRANSPORT_SPAWN_FAILED",
+      message: "Unable to start Rust transport process",
+      retryable: true,
+      details: {
+        category: "transport",
+        stage: "spawn",
+        operation: "remember",
+        owner: { component: "RustJsonlTransport", path: "rust-transport.ts", symbol: "RustJsonlTransport" },
+        execution: { request_dispatched: false, write_outcome: "not_started", retry: "safe_now" },
+      },
+    });
+    expect(error.details.observed.request).toEqual({ id: "1", method: "remember", dispatched: false });
+    expect(error.details.targets).toEqual(expect.arrayContaining([executable, cwd, "rust-transport.ts#RustJsonlTransport"]));
   }));
 
   test("duplicate response IDs make transport unusable", async () => withFixture("duplicate", async (file) => {
@@ -185,4 +312,37 @@ describe("Rust JSONL transport", () => {
     expect(outcomes[1]).toMatchObject({ status: "rejected" });
     expect((outcomes[1] as PromiseRejectedResult).reason.message).toContain("unknown or duplicate");
   }));
+
+  test("preserves reported child termination signals", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      killed: false,
+      pid: undefined,
+    });
+    child.stdin.once("data", () => queueMicrotask(() => child.emit("close", null, "SIGTERM")));
+    mock.module("node:child_process", () => ({
+      spawn: (executable: string) => {
+        if (executable === "taskkill") return { unref() {} };
+        queueMicrotask(() => child.emit("spawn"));
+        return child;
+      },
+    }));
+    const { RustJsonlTransport: SignalTransport } = await import(`../rust-transport.ts?signal-diagnostics=${Date.now()}`);
+    const client = new SignalTransport({ executable: "synthetic-rust-worker", cwd: "synthetic-cwd" });
+    const error = await client.request("remember", {}).catch((reason) => reason);
+    expect(error).toMatchObject({
+      code: "RUST_TRANSPORT_CHILD_EXITED",
+      retryable: true,
+      details: {
+        observed: {
+          signal: "SIGTERM",
+          exit_code: null,
+          request: { id: "1", method: "remember", dispatched: true },
+        },
+        evidence: expect.arrayContaining([expect.objectContaining({ type: "process_exit", signal: "SIGTERM", exit_code: null })]),
+      },
+    });
+  });
 });
