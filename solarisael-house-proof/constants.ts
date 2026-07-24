@@ -1,13 +1,18 @@
 // OMP Solarisael House constants.
 // Values only: paths, timeouts, filenames, and stable runtime defaults.
 
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const SOURCE_CORE_ROOT = fileURLToPath(new URL("../../the-athanor/", import.meta.url));
+const PORTABLE_CORE_ROOT = fileURLToPath(new URL("../../solarisael-house/", import.meta.url));
 export const HOUSE_CORE_ROOT = process.env.SOLARISAEL_HOUSE_CORE
   ? path.resolve(process.env.SOLARISAEL_HOUSE_CORE)
-  : fileURLToPath(new URL("../../solarisael-house/", import.meta.url));
+  : existsSync(path.join(SOURCE_CORE_ROOT, "index.ts"))
+    ? SOURCE_CORE_ROOT
+    : PORTABLE_CORE_ROOT;
 export const CODING_LESSONS_SCRIPT = path.join(HOUSE_CORE_ROOT, "src", "coding-lessons-by-shape.py");
 export const OBSIDIAN_ROOT = process.env.SOLARISAEL_VAULT_ROOT
   ? path.resolve(process.env.SOLARISAEL_VAULT_ROOT)

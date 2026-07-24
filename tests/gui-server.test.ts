@@ -35,7 +35,7 @@ describe("GUI server security boundary", () => {
     const response = await fetch(origin + "/api/rpc", { method: "POST", headers: { "x-csrf-token": handle.csrfToken, "content-type": "application/json", origin }, body: JSON.stringify({ method: "remember", params: { fail: true } }) });
     expect(response.status).toBe(500);
     const payload = await response.json() as any;
-    expect(payload.error).toEqual({
+    expect(payload.error).toMatchObject({
       code: "DATABASE_WRITE_FAILED",
       message: "Write rolled back",
       retryable: true,

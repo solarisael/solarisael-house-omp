@@ -180,7 +180,7 @@ const adapterRoot = existsSync(path.join(scriptRoot, "index.ts"))
   : path.join(scriptRoot, "solarisael-house-omp");
 const coreRoot = process.env.SOLARISAEL_HOUSE_CORE
   ? path.resolve(process.env.SOLARISAEL_HOUSE_CORE)
-  : path.resolve(path.dirname(adapterRoot), "solarisael-house");
+  : path.resolve(path.dirname(adapterRoot), "the-athanor");
 const roomArgument = argument("--room");
 const configPath = path.resolve(argument("--config") || path.join(os.homedir(), ".omp", "agent", "config.yml"));
 const substrateArgument = argument("--substrate");

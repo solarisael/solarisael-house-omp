@@ -348,60 +348,95 @@ function diagnosticInvocation(argv) {
 
 export function runWslDiagnostic({ argv, stdin, timeoutMs = DIAGNOSTIC_TIMEOUT_MS }) {
   return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timer;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolve(value);
+    };
     let invocation;
     try {
       invocation = diagnosticInvocation(argv);
     } catch (error) {
-      resolve({
+      finish({
         timedOut: false,
         spawnError: error?.message || String(error),
         code: null,
-        stdout: "",
-        stderr: "",
+        stdout,
+        stderr,
       });
       return;
     }
-    const child = spawn(invocation.command, invocation.args, {
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
 
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => {
-      child.kill();
-      finish({ timedOut: true, spawnError: null, code: null, stdout, stderr });
-    }, timeoutMs);
-
+    let child;
     try {
-      child.stdin?.end(String(stdin || ""));
-    } catch {
-      // Diagnostic only. Broken stdin should be reported through process exit.
+      child = spawn(invocation.command, invocation.args, {
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      finish({
+        timedOut: false,
+        spawnError: error?.message || String(error),
+        code: null,
+        stdout,
+        stderr,
+      });
+      return;
     }
 
-    child.stdout?.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
-    child.stderr?.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
-    child.on("error", (err) => finish({
+    timer = setTimeout(() => {
+      finish({ timedOut: true, spawnError: null, code: null, stdout, stderr });
+      try {
+        if (typeof child.kill === "function") child.kill();
+      } catch {
+        // A diagnostic timeout must still settle when a mocked or exited child cannot be killed.
+      }
+    }, timeoutMs);
+
+    const subscribe = (stream, event, listener) => {
+      if (typeof stream?.on === "function") stream.on(event, listener);
+    };
+    subscribe(child.stdout, "data", (chunk) => { stdout += chunk.toString("utf8"); });
+    subscribe(child.stderr, "data", (chunk) => { stderr += chunk.toString("utf8"); });
+    // Streams can report an error after the child closes; retaining listeners prevents an
+    // already-settled health probe from surfacing as an unrelated asynchronous test failure.
+    subscribe(child.stdin, "error", () => {});
+    subscribe(child.stdout, "error", () => {});
+    subscribe(child.stderr, "error", () => {});
+    subscribe(child, "error", (err) => finish({
       timedOut: false,
       spawnError: err?.message || String(err),
       code: null,
       stdout,
       stderr,
     }));
-    child.on("close", (code) => finish({
+    subscribe(child, "close", (code) => finish({
       timedOut: false,
       spawnError: null,
       code,
       stdout,
       stderr,
     }));
+
+    const input = child.stdin;
+    if (
+      !settled
+      && typeof input?.end === "function"
+      && input.writableEnded !== true
+      && input.destroyed !== true
+      && input.writable !== false
+    ) {
+      try {
+        input.end(String(stdin || ""));
+      } catch {
+        // Diagnostic only. Broken stdin should be reported through process exit.
+      }
+    }
   });
 }
 

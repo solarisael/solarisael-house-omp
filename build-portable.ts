@@ -9,7 +9,7 @@ const adapterRoot = path.dirname(fileURLToPath(import.meta.url));
 const projectsRoot = path.dirname(adapterRoot);
 const coreRoot = process.env.SOLARISAEL_HOUSE_CORE
   ? path.resolve(process.env.SOLARISAEL_HOUSE_CORE)
-  : path.join(projectsRoot, "solarisael-house");
+  : path.join(projectsRoot, "the-athanor");
 
 const outputPath = path.resolve(process.argv[2] || path.join(adapterRoot, "dist", "solarisael-house-portable.zip"));
 

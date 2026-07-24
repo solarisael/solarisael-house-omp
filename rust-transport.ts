@@ -8,6 +8,7 @@ export interface RustTransportOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   stderrLimitBytes?: number;
+  spawnProcess?: typeof spawn;
 }
 
 export interface RequestOptions {
@@ -36,8 +37,7 @@ export interface TransportDiagnostic extends JsonObject {
   owner: { component: string; path: string; symbol: string };
   expected?: unknown;
   observed?: unknown;
-  evidence: unknown[];
-  targets: string[];
+  targets: unknown[];
   next_checks: unknown[];
   execution: {
     request_dispatched: boolean;
@@ -70,7 +70,7 @@ function truncateDiagnosticText(value: string, limit = MAX_DIAGNOSTIC_TEXT_BYTES
 function redactDiagnosticText(value: string, limit = MAX_DIAGNOSTIC_TEXT_BYTES): string {
   const redacted = value
     .replace(/\b([a-z][a-z0-9+.-]*):\/\/[^\s/@]*:[^\s/@]*@/gi, "$1://[REDACTED]@")
-    .replace(/\b(authorization)\s*([:=])\s*[^\r\n]*/gi, "$1$2[REDACTED]")
+    .replace(/\b(authorization)\s*([:=])\s*[^\r\n]*/gi, "$1$2 [REDACTED]")
     .replace(/\b(bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [REDACTED]")
     .replace(/\b(password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key)\s*([:=])\s*(\"[^\"]*\"|'[^']*'|[^\s,;]+)/gi, "$1$2[REDACTED]");
   return truncateDiagnosticText(redacted, limit);
@@ -146,8 +146,52 @@ function isDiagnosticStage(value: unknown): value is DiagnosticStage {
     || value === "backup" || value === "response_encode" || value === "reconciliation" || value === "shutdown";
 }
 
+function isDiagnosticOwner(value: unknown): value is TransportDiagnostic["owner"] {
+  return isObject(value)
+    && typeof value.component === "string"
+    && typeof value.path === "string"
+    && typeof value.symbol === "string";
+}
+
+function isCanonicalDiagnosticDetails(value: unknown): value is TransportDiagnostic {
+  if (!isObject(value)) return false;
+  const hasDiagnosticField = hasOwn(value, "category")
+    || hasOwn(value, "stage")
+    || hasOwn(value, "operation")
+    || hasOwn(value, "owner")
+    || hasOwn(value, "expected")
+    || hasOwn(value, "observed")
+    || hasOwn(value, "evidence")
+    || hasOwn(value, "targets")
+    || hasOwn(value, "next_checks")
+    || hasOwn(value, "execution");
+  if (!hasDiagnosticField) return false;
+  if (hasOwn(value, "category") && !isDiagnosticCategory(value.category)) return false;
+  if (hasOwn(value, "stage") && !isDiagnosticStage(value.stage)) return false;
+  if (hasOwn(value, "operation") && typeof value.operation !== "string") return false;
+  if (hasOwn(value, "owner") && !isDiagnosticOwner(value.owner)) return false;
+  if (hasOwn(value, "evidence") && !Array.isArray(value.evidence)) return false;
+  if (hasOwn(value, "targets") && !Array.isArray(value.targets)) return false;
+  if (hasOwn(value, "next_checks") && !Array.isArray(value.next_checks)) return false;
+  if (!hasOwn(value, "execution")) return true;
+  if (!isObject(value.execution)) return false;
+  return (!hasOwn(value.execution, "request_dispatched") || typeof value.execution.request_dispatched === "boolean")
+    && (!hasOwn(value.execution, "write_outcome") || isWriteOutcome(value.execution.write_outcome))
+    && (!hasOwn(value.execution, "retry") || isRetryAdvice(value.execution.retry));
+}
+
+function uniqueDiagnosticValues(values: unknown[]): unknown[] {
+  const fingerprints = new Set<string>();
+  return values.filter((value) => {
+    const fingerprint = JSON.stringify(value) ?? String(value);
+    if (fingerprints.has(fingerprint)) return false;
+    fingerprints.add(fingerprint);
+    return true;
+  });
+}
 
 function mergeDiagnosticDetails(rawDetails: unknown, fallback: TransportDiagnostic): TransportDiagnostic {
+
   const sanitized = sanitizeDiagnosticValue(rawDetails);
   const raw = isObject(sanitized) ? sanitized : {};
   const rawOwner = isObject(raw.owner) ? raw.owner : {};
@@ -156,12 +200,13 @@ function mergeDiagnosticDetails(rawDetails: unknown, fallback: TransportDiagnost
   const fallbackObserved = isObject(fallback.observed) ? fallback.observed : undefined;
   const rawEvidence = Array.isArray(raw.evidence) ? raw.evidence : [];
   const rawNextChecks = Array.isArray(raw.next_checks) ? raw.next_checks : [];
+  const operation = typeof raw.operation === "string" ? raw.operation : fallback.operation;
 
   return {
     ...raw,
     category: isDiagnosticCategory(raw.category) ? raw.category : fallback.category,
     stage: isDiagnosticStage(raw.stage) ? raw.stage : fallback.stage,
-    operation: typeof raw.operation === "string" ? raw.operation : fallback.operation,
+    ...(operation === undefined ? {} : { operation }),
     owner: {
       component: typeof rawOwner.component === "string" ? rawOwner.component : fallback.owner.component,
       path: typeof rawOwner.path === "string" ? rawOwner.path : fallback.owner.path,
@@ -169,9 +214,9 @@ function mergeDiagnosticDetails(rawDetails: unknown, fallback: TransportDiagnost
     },
     ...(hasOwn(raw, "expected") ? { expected: raw.expected } : fallback.expected === undefined ? {} : { expected: fallback.expected }),
     observed: rawObserved || fallbackObserved ? { ...fallbackObserved, ...rawObserved } : undefined,
-    evidence: [...rawEvidence, ...fallback.evidence],
-    targets: uniqueStrings([...asStringArray(raw.targets), ...fallback.targets]),
-    next_checks: [...rawNextChecks, ...fallback.next_checks],
+    evidence: hasOwn(raw, "evidence") ? uniqueDiagnosticValues(rawEvidence) : fallback.evidence,
+    targets: hasOwn(raw, "targets") && Array.isArray(raw.targets) ? raw.targets : fallback.targets,
+    next_checks: hasOwn(raw, "next_checks") ? rawNextChecks : fallback.next_checks,
     execution: {
       request_dispatched: typeof rawExecution.request_dispatched === "boolean"
         ? rawExecution.request_dispatched
@@ -475,7 +520,7 @@ export class RustJsonlTransport {
   private ensureStarted(): void {
     if (this.child) return;
     this.childStarted = false;
-    const child = spawn(this.options.executable, this.options.args ?? [], {
+    const child = (this.options.spawnProcess ?? spawn)(this.options.executable, this.options.args ?? [], {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env },
       stdio: ["pipe", "pipe", "pipe"],
@@ -827,25 +872,28 @@ export class RustJsonlTransport {
       retry: pending.definitive ? "reconcile_first" : error.retryable ? "safe_now" : "after_change",
     };
     const fallback = this.detailsFor(pending, responseFailure);
+    const producerDetails = isCanonicalDiagnosticDetails(error.details);
     const merged = mergeDiagnosticDetails(error.details, fallback);
-    const observed = isObject(merged.observed) ? merged.observed : {};
-    observed.request = {
-      id: pending.id,
-      method: redactDiagnosticText(pending.method, 256),
-      dispatched: true,
+    if (!producerDetails) return merged;
+
+    const transportObservations: JsonObject = {
+      request: {
+        id: pending.id,
+        method: redactDiagnosticText(pending.method, 256),
+        dispatched: true,
+      },
+      execution: { ...fallback.execution },
     };
-    merged.observed = observed;
-    merged.operation = redactDiagnosticText(pending.method, 256);
-    merged.execution = {
-      ...merged.execution,
-      request_dispatched: true,
-      write_outcome: isWriteOutcome(merged.execution.write_outcome)
-        ? merged.execution.write_outcome
-        : "unknown",
-      retry: isRetryAdvice(merged.execution.retry)
-        ? merged.execution.retry
-        : pending.definitive ? "reconcile_first" : error.retryable ? "safe_now" : "after_change",
-    };
+    const stderrEvidence = this.stderrEvidence();
+    if (stderrEvidence) transportObservations.stderr = stderrEvidence;
+
+    if (isObject(merged.observed) && !hasOwn(merged.observed, "transport")) {
+      merged.observed = { ...merged.observed, transport: transportObservations };
+    } else if (!hasOwn(merged, "transport")) {
+      merged.transport = transportObservations;
+    } else {
+      merged.transport_observations = transportObservations;
+    }
     return merged;
   }
 

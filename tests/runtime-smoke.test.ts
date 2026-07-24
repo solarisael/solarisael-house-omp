@@ -256,7 +256,7 @@ describe("room onboarding contracts", () => {
 
     const result = await executeTool(tools, "room_state", {}, { cwd });
     expect(result.isError).toBeUndefined();
-    expect(result.details).toMatchObject({ room: "example", ok: true });
+    expect(result.details).toMatchObject({ state: { room: "example" } });
     expect(parseToolJson(result).state).toMatchObject({
       room: "example",
       agentName: "Moonlit Example Room",
@@ -611,7 +611,7 @@ describe("OMP safe tool execute runtime smoke", () => {
       {},
     );
     const readyJson = parseToolJson(readyDispatch);
-    expect(readyDispatch.isError).toBe(false);
+    expect(readyDispatch.isError).toBeUndefined();
     expect(readyJson).toMatchObject({
       ok: true,
       status: "ready",
@@ -632,9 +632,13 @@ describe("OMP safe tool execute runtime smoke", () => {
     expect(rejectedDispatch.isError).toBe(true);
     expect(rejectedJson).toMatchObject({
       ok: false,
-      status: "rejected",
+      status: "error",
       lane: null,
       taskPacket: null,
+      details: {
+        operation: "house_dispatch",
+        observed: { errors: ["Unknown worker lane: advisor"] },
+      },
     });
     expect(rejectedJson.errors).toEqual(["Unknown worker lane: advisor"]);
   });
@@ -660,12 +664,22 @@ describe("OMP safe tool execute runtime smoke", () => {
       ctx,
     );
     expect(missingSelector.isError).toBe(true);
-    expect(missingSelector.content?.[0]?.text).toBe("Could not resolve model selector for this session: missing-model");
+    expect(parseToolJson(missingSelector)).toMatchObject({
+      ok: false,
+      status: "error",
+      error: "Could not resolve model selector for this session: [redacted]",
+      message: "Could not resolve model selector for this session: [redacted]",
+    });
     expect(appliedModels).toEqual([]);
 
     const enableWithoutModel = await executeTool(tools, "house_model_default", { enabled: true }, ctx);
     expect(enableWithoutModel.isError).toBe(true);
-    expect(enableWithoutModel.content?.[0]?.text).toBe("Cannot enable room model default without a model selector.");
+    expect(parseToolJson(enableWithoutModel)).toMatchObject({
+      ok: false,
+      status: "error",
+      error: "Cannot enable room model default without a model selector.",
+      message: "Cannot enable room model default without a model selector.",
+    });
     expect(appliedModels).toEqual([]);
 
     const applied = await executeTool(
@@ -675,7 +689,7 @@ describe("OMP safe tool execute runtime smoke", () => {
       ctx,
     );
     expect(applied.isError).toBeUndefined();
-    expect(applied.details).toMatchObject({ ok: true, applied: true });
+    expect(applied.details).toMatchObject({ applied: true, modelDefault: { enabled: true, model: "pi/default" } });
     expect(parseToolJson(applied)).toMatchObject({
       modelDefault: { enabled: true, model: "pi/default" },
       applied: true,
@@ -686,7 +700,7 @@ describe("OMP safe tool execute runtime smoke", () => {
 
     const cleared = await executeTool(tools, "house_model_default", { clear: true }, ctx);
     expect(cleared.isError).toBeUndefined();
-    expect(cleared.details).toMatchObject({ ok: true, applied: false });
+    expect(cleared.details).toMatchObject({ applied: false, modelDefault: { enabled: false, model: null } });
     expect(parseToolJson(cleared)).toMatchObject({
       modelDefault: { enabled: false, model: null },
       applied: false,

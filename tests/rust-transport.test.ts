@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { EventEmitter } from "node:events";
@@ -322,15 +322,14 @@ describe("Rust JSONL transport", () => {
       pid: undefined,
     });
     child.stdin.once("data", () => queueMicrotask(() => child.emit("close", null, "SIGTERM")));
-    mock.module("node:child_process", () => ({
-      spawn: (executable: string) => {
-        if (executable === "taskkill") return { unref() {} };
+    const client = new RustJsonlTransport({
+      executable: "synthetic-rust-worker",
+      cwd: "synthetic-cwd",
+      spawnProcess: (() => {
         queueMicrotask(() => child.emit("spawn"));
         return child;
-      },
-    }));
-    const { RustJsonlTransport: SignalTransport } = await import(`../rust-transport.ts?signal-diagnostics=${Date.now()}`);
-    const client = new SignalTransport({ executable: "synthetic-rust-worker", cwd: "synthetic-cwd" });
+      }) as any,
+    });
     const error = await client.request("remember", {}).catch((reason) => reason);
     expect(error).toMatchObject({
       code: "RUST_TRANSPORT_CHILD_EXITED",

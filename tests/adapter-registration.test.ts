@@ -5,7 +5,7 @@ type CapturedTool = {
   name: string;
   parameters: Schema;
   approval?: string;
-  execute?: (...args: unknown[]) => Promise<{ details?: unknown }>;
+  execute?: (...args: unknown[]) => Promise<{ content?: Array<{ text: string }>; details?: unknown }>;
 };
 
 type Schema = {
@@ -342,9 +342,15 @@ describe("OMP adapter registration", () => {
       { cwd: process.cwd() },
     );
 
-    expect(result.details).toEqual({
-      ok: false,
-      error: "kind 'project-lesson' requires field 'project'",
+    const output = JSON.parse(result.content![0]!.text);
+    expect(result.details).toEqual(output);
+    expect(output.message).toBe("kind 'project-lesson' requires field 'project'");
+    expect(output.details.operation).toBe("remember");
+    expect(output.details.stage).toBe("validation");
+    expect(output.details.execution).toEqual({
+      request_dispatched: false,
+      write_outcome: "not_started",
+      retry: "after_change",
     });
   });
 });

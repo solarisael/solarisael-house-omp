@@ -38,6 +38,8 @@ import {
 } from "./feedback.ts";
 
 const rustRememberTransports = new Map<string, RustJsonlTransport>();
+const LANE_STATUS_HEALTH_TIMEOUT_MS = 3_000;
+
 
 function rustRememberTransport(): RustJsonlTransport | null {
   const executable = discoverRustExecutable();
@@ -640,7 +642,7 @@ export function registerSolarisaelTools(pi) {
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const { sharedRoot } = roomContext(ctx?.cwd);
       const result = await laneStatus();
-      const substrate = await substrateHealth(sharedRoot);
+      const substrate = await substrateHealth(sharedRoot, LANE_STATUS_HEALTH_TIMEOUT_MS);
       const status = { ...result, substrate };
       return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }], details: status };
     },

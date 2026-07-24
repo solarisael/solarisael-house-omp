@@ -80,7 +80,7 @@ describe("House tool feedback", () => {
         ...(tool.name === "house_lane_status" ? { substrate: { mode: "degraded", degradedReasons: ["health check unavailable"] } } : {}),
       };
       const result = normalizeToolResponse({ content: [{ type: "text", text: JSON.stringify(success) }] }, tool.name);
-      expect(result.isError).toBe(false);
+      expect(result).not.toHaveProperty("isError");
       expect(parsed(result)).toEqual(success);
       expect(result.details).toEqual(success);
     }
@@ -122,6 +122,7 @@ describe("House tool feedback", () => {
           warnings: ["degraded replica"],
         },
       });
+      expect(output.error).toBe(output.message);
       expect(output.details.evidence).toHaveLength(1);
       expect(output.details.requestBody).toEqual({ redacted: true, present: true });
       expect(JSON.stringify(output)).not.toContain("ultra-secret");
@@ -156,6 +157,7 @@ describe("House tool feedback", () => {
         ],
       },
     });
+    expect(output.error).toBe(output.message);
     expect(JSON.stringify(output)).not.toContain("stderr-secret");
     const opaqueDetails = normalizeToolResponse({
       isError: true,

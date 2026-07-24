@@ -230,10 +230,27 @@ function canonicalError(payload: unknown, operation: string): JsonRecord {
       retry,
     },
   };
+  const preservedSource = Object.fromEntries(
+    Object.entries(source)
+      .filter(([key]) => ![
+        "ok",
+        "status",
+        "error",
+        "message",
+        "code",
+        "retryable",
+        "details",
+        "evidence",
+        "targets",
+      ].includes(key))
+      .map(([key, value]) => [key, redact(value, key)]),
+  );
   return {
+    ...preservedSource,
     ok: false,
     status: "error",
     code,
+    error: message,
     message,
     retryable,
     details,
@@ -246,7 +263,7 @@ function finalFeedback(payload: unknown, operation: string, declaredError = fals
     return { isError: true, content: [{ type: "text" as const, text: canonicalJson(error) }], details: error };
   }
   try {
-    return { isError: false, content: [{ type: "text" as const, text: canonicalJson(payload) }], details: payload };
+    return { content: [{ type: "text" as const, text: canonicalJson(payload) }], details: payload };
   } catch (error) {
     return finalFeedback({ error }, operation, true);
   }
@@ -293,7 +310,7 @@ export function emitToolUpdate(onUpdate: unknown, operation: string): void {
       execution: { request_dispatched: false, write_outcome: "not_started", retry: "never" },
     },
   };
-  (onUpdate as ToolUpdate)({ isError: false, content: [{ type: "text", text: canonicalJson(update) }], details: update });
+  (onUpdate as ToolUpdate)({ content: [{ type: "text", text: canonicalJson(update) }], details: update });
 }
 
 function compactResult(result: unknown): string {

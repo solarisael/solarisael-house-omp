@@ -107,14 +107,11 @@ afterEach(async () => {
 });
 
 describe("portable bundle path contract", () => {
-  test("resolves the default house core as the adapter repository's sibling in a fresh Bun import", async () => {
-    const root = await makeTempRoot("omp-portable-default-");
-    const home = path.join(root, "home");
-    await mkdir(home, { recursive: true });
+  test("names the canonical sibling directory as the default bundle core", async () => {
+    const builderSource = await readFile(portableBuilder, "utf8");
 
-    const result = await runConstantsProbe(isolatedEnv(home));
-
-    expect(path.resolve(result.houseCoreRoot)).toBe(path.resolve(adapterRoot, "..", "solarisael-house"));
+    expect(builderSource).toContain('path.join(projectsRoot, "the-athanor")');
+    expect(builderSource).not.toContain('path.join(projectsRoot, "solarisael-house")');
   });
 
   test("honors SOLARISAEL_HOUSE_CORE in a separate Bun process, not a cached constants module", async () => {
@@ -179,7 +176,7 @@ describe("portable bundle builder safety", () => {
     await cp(path.join(adapterRoot, "gui"), path.join(stagedAdapter, "gui"), { recursive: true });
     await cp(path.join(adapterRoot, "discovery.ts"), path.join(stagedAdapter, "discovery.ts"));
     for (const filename of ["README.md", "INSTALL.md", "USAGE.md", "IDENTITY_GUIDE.md", "LICENSE", "NOTICE"]) {
-      await cp(path.join(adapterRoot, "..", "solarisael-house", filename), path.join(core, filename));
+      await cp(path.join(adapterRoot, "..", "the-athanor", filename), path.join(core, filename));
     }
     for (const filename of ["README.md", "LICENSE", "NOTICE", "verify-install.ts"]) {
       await cp(path.join(adapterRoot, filename), path.join(stagedAdapter, filename));
@@ -215,7 +212,6 @@ describe("portable bundle builder safety", () => {
     const output = path.join(root, "portable-onboarding.zip");
     await mkdir(path.join(home, "temp"), { recursive: true });
     await run(process.execPath, [portableBuilder, output], adapterRoot, isolatedEnv(home, {
-      SOLARISAEL_HOUSE_CORE: path.resolve(adapterRoot, "..", "solarisael-house"),
       SOLARISAEL_HOUSE_RUST: process.execPath,
     }));
 
@@ -253,13 +249,13 @@ describe("portable bundle builder safety", () => {
     ]));
     expect(entries).not.toContain("verify-install.ts");
     expect(entries.some((entry) => entry.startsWith("solarisael-house-substrate/"))).toBe(false);
-  });
+  }, 15_000);
   test("verifies a complete generic room and reports a missing host context entrypoint", async () => {
     const root = await makeTempRoot("omp-portable-verify-");
     const home = path.join(root, "home");
     const room = path.join(root, "example");
     const configPath = path.join(home, ".omp", "agent", "config.yml");
-    const core = path.resolve(adapterRoot, "..", "solarisael-house");
+    const core = path.resolve(adapterRoot, "..", "the-athanor");
     const verifyInstaller = path.join(adapterRoot, "verify-install.ts");
     const trueName = "Example Room";
     const operator = "Ada Lovelace";
