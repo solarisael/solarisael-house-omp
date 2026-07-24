@@ -30,6 +30,12 @@ import { discoverRustExecutable } from "../discovery.ts";
 import { dispatchWorker, laneStatus } from "./routing.ts";
 import { REMEMBER_STORES, buildStoreArgs } from "./stores.ts";
 import { WRITE_TIMEOUT_MS } from "./constants.ts";
+import {
+  createToolRenderers,
+  emitToolUpdate,
+  normalizeToolResponse,
+  toolThrown,
+} from "./feedback.ts";
 
 const rustRememberTransports = new Map<string, RustJsonlTransport>();
 
@@ -62,8 +68,43 @@ function sourcePathKey(value: unknown): string {
 function deterministicMemorySourcePath(room: string, title: string, body: string, threads: unknown[], supersedes: unknown[]): string {
   const canonical = JSON.stringify({ room, title, body, threads, supersedes });
   const digest = createHash("sha256").update(canonical).digest("hex").slice(0, 24);
+
   const baseline = memorySourcePath(title, new Date(0));
   return baseline.replace(/^memory\/omp_[^_]+_/, `memory/omp_${digest}_`);
+}
+
+function rustFailureReceipt(error: RustTransportError): Record<string, unknown> {
+  const upstreamDetails = error.details && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details as Record<string, unknown>
+    : { upstream_details: error.details ?? null };
+  const stderr = error.stderr.slice(0, 4096);
+  const evidence = Array.isArray(upstreamDetails.evidence) ? [...upstreamDetails.evidence] : [];
+  if (stderr) {
+    evidence.push({
+      source: "rust_stderr",
+      text: stderr,
+      truncated: error.stderr.length > stderr.length,
+    });
+  }
+  return {
+    ok: false,
+    error: error.message,
+    code: error.code,
+    retryable: error.retryable,
+    details: { ...upstreamDetails, evidence },
+  };
+}
+
+function unknownOutcomeDetails(error: unknown): Record<string, unknown> {
+  const source = error && typeof error === "object" ? error as { details?: unknown; cause?: unknown } : {};
+  const details = source.details && typeof source.details === "object" && !Array.isArray(source.details)
+    ? source.details as Record<string, unknown>
+    : source.details === undefined ? {} : { upstream_details: source.details };
+  if (!(source.cause instanceof Error)) return details;
+  return {
+    ...details,
+    cause: { name: source.cause.name, message: source.cause.message },
+  };
 }
 function isOutcomeUnknownError(error: unknown): boolean {
   return error instanceof RustTransportOutcomeUnknownError;
@@ -93,18 +134,20 @@ function unknownWriteReceipt(error: unknown, sourcePath: string, reconciliation:
     outcome: "unknown",
     retryable: true,
     sourcePath,
+    committed: reconciliation.committed,
     reconciled: reconciliation.reconciled,
-    details: (error as { details?: unknown })?.details,
+    details: unknownOutcomeDetails(error),
   };
 }
 
-function unknownLessonReceipt(): Record<string, unknown> {
+function unknownLessonReceipt(error?: unknown): Record<string, unknown> {
   return {
     ok: false,
     error: "Rust lesson write outcome is unknown after dispatch",
     code: "outcome_unknown",
     outcome: "unknown",
     retryable: true,
+    details: unknownOutcomeDetails(error),
   };
 }
 
@@ -146,7 +189,7 @@ async function writeRustMemory({ room, title, body, threads, supersedes, signal 
     }
     if (!transport.usable) evictRustRememberTransport(executable, transport);
     if (error instanceof RustTransportError) {
-      return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
+      return rustFailureReceipt(error);
     }
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -187,15 +230,26 @@ async function writeRustLesson({ room, kind, title, body, fields, backup, signal
         code: "outcome_unknown",
         outcome: "unknown",
         retryable: true,
-        details: error instanceof RustTransportError ? error.details : undefined,
+        details: unknownOutcomeDetails(error),
       };
     }
     if (!transport.usable) evictRustRememberTransport(executable, transport);
     if (error instanceof RustTransportError) {
-      return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
+      return rustFailureReceipt(error);
     }
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function unknownAnamnesisReceipt(error?: unknown): Record<string, unknown> {
+  return {
+    ok: false,
+    error: "Rust anamnesis write outcome is unknown after dispatch",
+    code: "outcome_unknown",
+    outcome: "unknown",
+    retryable: true,
+    details: unknownOutcomeDetails(error),
+  };
 }
 async function writeRustAnamnesis({ room, payload, signal }) {
   const executable = discoverRustExecutable();
@@ -209,7 +263,7 @@ async function writeRustAnamnesis({ room, payload, signal }) {
     });
     if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
       evictRustRememberTransport(executable, transport);
-      return { ok: false, error: "Rust anamnesis write outcome is unknown after dispatch", code: "outcome_unknown", outcome: "unknown", retryable: true };
+      return unknownAnamnesisReceipt();
     }
     const value = receipt as Record<string, unknown>;
     if (value.ok !== true || value.operation !== operation || value.room !== room
@@ -219,21 +273,17 @@ async function writeRustAnamnesis({ room, payload, signal }) {
       || value.durable !== true || value.authority !== "postgres"
       || !Array.isArray(value.warnings) || !value.warnings.every((warning) => typeof warning === "string")) {
       evictRustRememberTransport(executable, transport);
-      return { ok: false, error: "Rust anamnesis write outcome is unknown after dispatch", code: "outcome_unknown", outcome: "unknown", retryable: true };
+      return unknownAnamnesisReceipt();
     }
     return { ok: true, ...value };
   } catch (error) {
     if (isOutcomeUnknownError(error)) {
       evictRustRememberTransport(executable, transport);
-      return {
-        ok: false, error: "Rust anamnesis write outcome is unknown after dispatch",
-        code: "outcome_unknown", outcome: "unknown", retryable: true,
-        details: error instanceof RustTransportError ? error.details : undefined,
-      };
+      return unknownAnamnesisReceipt(error);
     }
     if (!transport.usable) evictRustRememberTransport(executable, transport);
     if (error instanceof RustTransportError) {
-      return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
+      return rustFailureReceipt(error);
     }
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -255,10 +305,27 @@ function refuseToolResult(error) {
   };
 }
 
+function registerHouseTool(pi, definition) {
+  const execute = definition.execute;
+  const renderers = createToolRenderers(definition.name, definition.label);
+  pi.registerTool({
+    ...definition,
+    ...renderers,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      emitToolUpdate(onUpdate, definition.name);
+      try {
+        return normalizeToolResponse(await execute(toolCallId, params, signal, onUpdate, ctx), definition.name);
+      } catch (error) {
+        return toolThrown(error, definition.name);
+      }
+    },
+  });
+}
+
 export function registerSolarisaelTools(pi) {
   const z = pi.zod;
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "recall",
     label: "Solarisael Recall",
     description: [
@@ -273,7 +340,7 @@ export function registerSolarisaelTools(pi) {
     approval: "read",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const { room, effectiveRoomDir } = roomContext(ctx.cwd);
-
+  
       try {
         const recalled = await recallWithRouting(effectiveRoomDir, room, params.query, { signal: _signal });
         if (!recalled.ok) {
@@ -298,7 +365,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "remember",
     label: "Solarisael Remember",
     description: "Write a durable memory or lesson to the Solarisael substrate. In Full House, PostgreSQL is authoritative; source paths are provenance or backup, not the memory body. For memory, preserve retrieval-bearing concrete facts. Do not replace the event with only a conclusion or transcript pointer. The memory must stand alone.",
@@ -325,7 +392,7 @@ export function registerSolarisaelTools(pi) {
         const result = { ok: false, error };
         return { isError: true, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       };
-
+  
       if (kind === "memory") {
         const lessonOnly = ["shape", "voice", "scope", "project", "proofPattern", "triggerContext", "tags"].filter((key) => {
           const value = params[key];
@@ -340,7 +407,7 @@ export function registerSolarisaelTools(pi) {
           : await writeSessionMemory({ sharedRoot, room, title: params.title, body: params.body, backup: false, threads: params.threads || [], supersedes: [...new Set(params.supersedes || [])] });
         return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       }
-
+  
       if (Array.isArray(params.threads) && params.threads.length > 0) return refuse("threads are memory-only; lesson stores do not take threads");
       if (Array.isArray(params.supersedes) && params.supersedes.length > 0) return refuse("supersedes is memory-only; lesson stores do not supersede memory rows");
       const store = REMEMBER_STORES[kind];
@@ -368,7 +435,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "delete_lesson",
     label: "Solarisael Delete Lesson (Destructive)",
     description: [
@@ -399,7 +466,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "update_lesson",
     label: "Solarisael Update Lesson",
     description: [
@@ -459,7 +526,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "wake",
     label: "Solarisael Wake",
     description: "Catch the latest paper boat for this room.",
@@ -472,7 +539,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "room_state",
     label: "Solarisael Room State",
     description: "Read the current Solarisael room agency state for this workspace.",
@@ -485,7 +552,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "set_room_state",
     label: "Solarisael Set Room State",
     description: "Update safe room agency fields: operator and embodiedSpirit. Also refreshes active_spirit.md.",
@@ -517,7 +584,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "coding_lessons",
     label: "Solarisael Coding Lessons",
     description: "Fetch coding/process lesson pairs from the substrate for a shape such as process. Use before risky process or tooling choices.",
@@ -535,7 +602,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "sleep",
     label: "Solarisael Sleep",
     description: "Close the session by writing one paper boat with backup enabled.",
@@ -561,7 +628,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "house_lane_status",
     label: "Solarisael House Lane Status",
     description: [
@@ -579,7 +646,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "house_dispatch",
     label: "Solarisael House Dispatch",
     description: [
@@ -612,7 +679,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "house_routing_mode",
     label: "Solarisael House Routing Mode",
     description: "Read or toggle the default worker-routing modus operandi for this room.",
@@ -641,7 +708,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "house_model_default",
     label: "Solarisael House Model Default",
     description: "Read or set this room's default OMP model selector. Applied once near session start when enabled.",
@@ -657,7 +724,7 @@ export function registerSolarisaelTools(pi) {
       const current = await loadRoomState(effectiveRoomDir, room, spirit);
       const modelDefault = { ...(current.modelDefault || {}) };
       const model = typeof params.model === "string" ? params.model.trim() : "";
-
+  
       if (model) {
         const resolved = ctx.models?.resolve?.(model);
         if (!resolved) {
@@ -669,7 +736,7 @@ export function registerSolarisaelTools(pi) {
         }
         modelDefault.model = model;
       }
-
+  
       if (params.clear) {
         modelDefault.enabled = false;
         modelDefault.model = null;
@@ -682,7 +749,7 @@ export function registerSolarisaelTools(pi) {
           details: { room, ok: false },
         };
       }
-
+  
       const shouldSave = Boolean(model || params.clear || typeof params.enabled === "boolean");
       const next = shouldSave
         ? await saveRoomState(effectiveRoomDir, {
@@ -693,7 +760,7 @@ export function registerSolarisaelTools(pi) {
           },
         })
         : current;
-
+  
       let applied = false;
       if (params.applyNow !== false && next.modelDefault?.enabled && next.modelDefault?.model && typeof pi.setModel === "function") {
         const resolved = ctx.models?.resolve?.(next.modelDefault.model);
@@ -702,14 +769,14 @@ export function registerSolarisaelTools(pi) {
           applied = true;
         }
       }
-
+  
       return {
         content: [{ type: "text", text: JSON.stringify({ path: statePathForRoom(effectiveRoomDir), modelDefault: next.modelDefault, applied }, null, 2) }],
         details: { room, ok: true, modelDefault: next.modelDefault, applied },
       };
     },
   });
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "anamnesis",
     label: "Solarisael Anamnesis",
     description: "Read the Anamnesis Cabinet as bounded counsel for this room.",
@@ -740,7 +807,7 @@ export function registerSolarisaelTools(pi) {
     },
   });
 
-  pi.registerTool({
+  registerHouseTool(pi, {
     name: "anamnesis_write",
     label: "Solarisael Anamnesis Write",
     description: "Write an Anamnesis Cabinet drawer or append a lived repetition; writer refusals remain final.",
