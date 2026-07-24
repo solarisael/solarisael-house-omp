@@ -85,13 +85,23 @@ describe("Rust recall routing", () => {
     await expect(recallWithRouting("room-dir", "example", "alpha")).resolves.toMatchObject({ ok: true });
   });
 
-  test("rejects malformed results before compaction", async () => {
+  test("reports invalid result validation with a safe observed shape", async () => {
     RustJsonlTransport.prototype.request = async function () {
-      return { ok: true, query: "alpha", found: true, source: "rust-postgres" };
+      return { ok: true, query: "alpha", found: true, source: "rust-postgres", private_payload: "do-not-leak" };
     };
     const routed = await recallWithRouting("room-dir", "example", "alpha");
     expect(routed.ok).toBe(false);
     expect(routed.result.error).toContain("result.retrievalCandidates must be an array");
+    expect(routed.result).toMatchObject({
+      code: "invalid_rust_result",
+      retryable: true,
+      details: {
+        owner: { symbol: "validRustRecallResult" },
+        observed: { type: "object", fields: { private_payload: "string" } },
+        execution: { request_dispatched: true, write_outcome: "not_started", retry: "safe_now" },
+      },
+    });
+    expect(JSON.stringify(routed.result.details)).not.toContain("do-not-leak");
   });
 
   test("rejects missing taxonomy", async () => {
@@ -116,7 +126,7 @@ describe("Rust recall routing", () => {
     expect(routed.result.error).toContain("exact compactor candidate fields");
   });
 
-  test("evicts an unusable transport so the next request respawns it", async () => {
+  test("reports a transport crash with a retry-safe diagnostic and respawns the next request", async () => {
     let calls = 0;
     RustJsonlTransport.prototype.request = async function () {
       calls += 1;
@@ -126,19 +136,57 @@ describe("Rust recall routing", () => {
       }
       return result("alpha");
     };
-    await expect(recallWithRouting("room-dir", "example", "alpha")).resolves.toMatchObject({ ok: false });
+    const crash = await recallWithRouting("room-dir", "example", "alpha");
+    expect(crash).toMatchObject({
+      ok: false,
+      result: {
+        code: "rust_transport_failure",
+        retryable: true,
+        details: {
+          category: "transport",
+          observed: { error_type: "Error" },
+          execution: { request_dispatched: true, write_outcome: "not_started", retry: "safe_now" },
+        },
+      },
+    });
     await expect(recallWithRouting("room-dir", "example", "alpha")).resolves.toEqual({ ok: true, result: result("alpha") });
     expect(calls).toBe(2);
   });
 
-  test("surfaces structured Rust errors without fallback", async () => {
+  test("preserves structured Rust diagnostics instead of taking the fallback route", async () => {
     RustJsonlTransport.prototype.request = async function () {
-      throw new RustTransportError({ code: "postgres_unavailable", message: "database down", retryable: false });
+      throw new RustTransportError({
+        code: "postgres_unavailable",
+        message: "database down",
+        retryable: false,
+        details: {
+          expected: { database: "reachable" },
+          observed: { connection: "refused" },
+          evidence: [{ kind: "postgres", state: "down" }],
+          targets: ["postgres://local"],
+          next_checks: [{ action: "start", target: "postgres" }],
+          execution: { request_dispatched: true, write_outcome: "not_started", retry: "after_change" },
+        },
+      }, "postgres password=secret unavailable");
     };
     const routed = await recallWithRouting("room-dir", "example", "alpha");
     expect(routed).toMatchObject({
       ok: false,
-      result: { ok: false, query: "alpha", error: "database down", code: "postgres_unavailable", retryable: false },
+      result: {
+        ok: false,
+        query: "alpha",
+        error: "database down",
+        code: "postgres_unavailable",
+        retryable: false,
+        details: {
+          expected: { database: "reachable" },
+          observed: { connection: "refused" },
+          targets: ["postgres://local"],
+          next_checks: [{ action: "start", target: "postgres" }],
+          execution: { retry: "after_change" },
+          evidence: [{ kind: "postgres", state: "down" }, { kind: "stderr", text: "postgres password=[redacted] unavailable" }],
+        },
+      },
     });
   });
   test("preserves valid cluster telemetry while stripping malformed advisory fields", async () => {

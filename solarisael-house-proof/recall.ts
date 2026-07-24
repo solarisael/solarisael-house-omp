@@ -22,6 +22,118 @@ function text(value) {
   return String(value).trim();
 }
 
+const RECALL_VALIDATOR_SYMBOL = "validRustRecallResult";
+
+function observedShape(value) {
+  if (value === null) return { type: "null" };
+  if (Array.isArray(value)) return { type: "array", length: value.length };
+  if (typeof value !== "object") return { type: typeof value };
+  const entries = Object.keys(value).sort().slice(0, 32).map((key) => {
+    const field = value[key];
+    return [key, field === null ? "null" : Array.isArray(field) ? "array" : typeof field];
+  });
+  return {
+    type: "object",
+    fields: Object.fromEntries(entries),
+    ...(Object.keys(value).length > entries.length ? { fields_truncated: true } : {}),
+  };
+}
+
+function diagnosticDetails({ category, stage, operation, owner, expected, observed, evidence, targets, nextChecks, execution }) {
+  return {
+    category,
+    stage,
+    operation,
+    owner,
+    expected,
+    observed,
+    evidence,
+    targets,
+    next_checks: nextChecks,
+    execution,
+  };
+}
+
+function invalidRustRecallFailure(validationError, value) {
+  return {
+    ok: false,
+    error: `invalid Rust recall result: ${validationError}`,
+    code: "invalid_rust_result",
+    retryable: true,
+    details: diagnosticDetails({
+      category: "protocol",
+      stage: "validation",
+      operation: "recall",
+      owner: {
+        component: "solarisael-house-omp",
+        path: "solarisael-house-proof/recall.ts",
+        symbol: RECALL_VALIDATOR_SYMBOL,
+      },
+      expected: { validator: RECALL_VALIDATOR_SYMBOL, result: "valid Rust recall response" },
+      observed: observedShape(value),
+      evidence: [{ kind: "validator_failure", symbol: RECALL_VALIDATOR_SYMBOL, reason: validationError }],
+      targets: ["solarisael-house-proof/recall.ts#validRustRecallResult"],
+      nextChecks: [{ action: "inspect", target: "solarisael-house-proof/recall.ts#validRustRecallResult" }],
+      execution: { request_dispatched: true, write_outcome: "not_started", retry: "safe_now" },
+    }),
+  };
+}
+
+function boundedStderr(stderr) {
+  return String(stderr || "")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s@/]+@/gi, "$1[redacted]@")
+    .replace(/(\b(?:token|password|authorization)\s*[=:]\s*)(?:Bearer\s+)?\S+/gi, "$1[redacted]")
+    .slice(0, 2000);
+}
+
+function rustRecallFailure(error, transport) {
+  const stderr = boundedStderr(error instanceof RustTransportError ? error.stderr : transport.stderrDiagnostics);
+  if (error instanceof RustTransportError) {
+    const details = error.details && typeof error.details === "object" && !Array.isArray(error.details)
+      ? {
+        ...error.details,
+        ...(stderr ? {
+          evidence: [
+            ...(Array.isArray(error.details.evidence) ? error.details.evidence : []),
+            { kind: "stderr", text: stderr },
+          ],
+        } : {}),
+      }
+      : stderr ? diagnosticDetails({
+        category: "transport",
+        stage: "request_parse",
+        operation: "recall",
+        owner: { component: "solarisael-house-omp", path: "solarisael-house-proof/recall.ts", symbol: "rustRecallFailure" },
+        expected: { transport: "a structured Rust response or transport error" },
+        observed: { transport_details: observedShape(error.details) },
+        evidence: [{ kind: "stderr", text: stderr }],
+        targets: ["rust-transport.ts#RustJsonlTransport.request"],
+        nextChecks: [{ action: "inspect", target: "rust-transport.ts#RustJsonlTransport.request" }],
+        execution: { request_dispatched: true, write_outcome: "not_started", retry: error.retryable ? "safe_now" : "after_change" },
+      })
+      : error.details;
+    return { ok: false, error: error.message, code: error.code, retryable: error.retryable, ...(details === undefined ? {} : { details }) };
+  }
+  return {
+    ok: false,
+    error: "Rust transport request failed",
+    code: "rust_transport_failure",
+    retryable: true,
+    details: diagnosticDetails({
+      category: "transport",
+      stage: "request_parse",
+      operation: "recall",
+      owner: { component: "solarisael-house-omp", path: "solarisael-house-proof/recall.ts", symbol: "rustRecallFailure" },
+      expected: { transport: "a structured Rust response or transport error" },
+      observed: { error_type: error instanceof Error ? error.name : typeof error },
+      evidence: stderr ? [{ kind: "stderr", text: stderr }] : [],
+      targets: ["rust-transport.ts#RustJsonlTransport.request"],
+      nextChecks: [{ action: "inspect", target: "rust-transport.ts#RustJsonlTransport.request" }],
+      execution: { request_dispatched: true, write_outcome: "not_started", retry: "safe_now" },
+    }),
+  };
+}
+
 function strings(value) {
   if (!Array.isArray(value)) return [];
   const out = [];
@@ -223,6 +335,36 @@ function validClusterResonance(value) {
     && Array.isArray(value.hot) && value.hot.every(validClusterHot);
 }
 
+function fallbackRecallFailure(value, source) {
+  const result = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  if (result && typeof result.code === "string" && typeof result.retryable === "boolean") {
+    return {
+      ok: false,
+      error: typeof result.error === "string" ? result.error : `Recall ${source} failed`,
+      code: result.code,
+      retryable: result.retryable,
+      ...(result.details === undefined ? {} : { details: result.details }),
+    };
+  }
+  return {
+    ok: false,
+    error: `Recall ${source} failed`,
+    code: "recall_fallback_failure",
+    retryable: true,
+    details: diagnosticDetails({
+      category: "operation",
+      stage: "request_parse",
+      operation: "recall",
+      owner: { component: "solarisael-house-omp", path: "solarisael-house-proof/recall.ts", symbol: "recallWithFallback" },
+      expected: { source, result: "a successful recall result" },
+      observed: observedShape(value),
+      evidence: [],
+      targets: ["solarisael-house-proof/recall.ts#recallWithFallback"],
+      nextChecks: [{ action: "inspect", target: "solarisael-house-proof/recall.ts#recallWithFallback" }],
+      execution: { request_dispatched: true, write_outcome: "not_started", retry: "safe_now" },
+    }),
+  };
+}
 
 async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
   const sourceScript = await postgresSourceScript();
@@ -252,10 +394,10 @@ async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
     argv,
     probe: {
       timedOut: probe.timedOut,
-      spawnError: probe.spawnError,
+      spawnError: Boolean(probe.spawnError),
       code: probe.code,
-      stdout: String(probe.stdout || "").slice(0, 1200),
-      stderr: String(probe.stderr || "").slice(0, 2000),
+      stdout_bytes: Buffer.byteLength(String(probe.stdout || "")),
+      ...(probe.stderr ? { stderr: boundedStderr(probe.stderr) } : {}),
     },
   };
 }
@@ -322,30 +464,38 @@ async function runDirectRecallFallback(effectiveRoomDir, room, query) {
 export async function recallWithFallback(effectiveRoomDir, room, query) {
   const configurationError = substrateConfigurationError();
   if (configurationError) {
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        query,
-        error: configurationError,
-        fallback: { ok: false, error: configurationError },
-      },
-    };
+    const failure = fallbackRecallFailure({ error: configurationError }, "configuration");
+    return { ok: false, result: { query, ...failure, fallback: { ok: false, ...failure } } };
   }
-  const memory = await loadHouseMemory();
-  const result = await memory.runRecallQuery(effectiveRoomDir, room, query);
+
+  let result;
+  try {
+    const memory = await loadHouseMemory();
+    result = await memory.runRecallQuery(effectiveRoomDir, room, query);
+  } catch (error) {
+    result = { error: error instanceof Error ? error.message : String(error) };
+  }
   if (result?.ok) return { ok: true, result };
 
-  const fallback = await runDirectRecallFallback(effectiveRoomDir, room, query);
+  let fallback;
+  try {
+    fallback = await runDirectRecallFallback(effectiveRoomDir, room, query);
+  } catch (error) {
+    fallback = fallbackRecallFailure({ error: error instanceof Error ? error.message : String(error) }, "direct fallback");
+  }
   if (fallback.ok) return { ok: true, result: fallback };
 
-  const diagnostic = await diagnoseRecallFailure(effectiveRoomDir, room, query);
+  let diagnostic;
+  try {
+    diagnostic = await diagnoseRecallFailure(effectiveRoomDir, room, query);
+  } catch (error) {
+    diagnostic = fallbackRecallFailure({ error: error instanceof Error ? error.message : String(error) }, "diagnostic probe");
+  }
   return {
     ok: false,
     result: {
-      ok: false,
       query,
-      error: result?.error || "unknown recall failure",
+      ...fallbackRecallFailure(result, "memory fallback"),
       fallback,
       diagnostic,
     },
@@ -425,12 +575,6 @@ function validRustRecallResult(value, query) {
   return null;
 }
 
-function rustRecallFailure(error) {
-  if (error instanceof RustTransportError) {
-    return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
-  }
-  return { ok: false, error: error instanceof Error ? error.message : String(error) };
-}
 
 function stripInvalidClusterTelemetry(result) {
   if (!result || typeof result !== "object") return result;
@@ -461,12 +605,12 @@ export async function recallWithRouting(effectiveRoomDir, room, query, { signal 
     const validationError = validRustRecallResult(result, query);
     if (validationError) {
       evictRustRecallTransport(executable, transport);
-      return { ok: false, result: { ok: false, query, error: `invalid Rust recall result: ${validationError}` } };
+      return { ok: false, result: { query, ...invalidRustRecallFailure(validationError, result) } };
     }
     return { ok: true, result: stripInvalidClusterTelemetry(result) };
   } catch (error) {
     if (!transport.usable) evictRustRecallTransport(executable, transport);
-    return { ok: false, result: { ok: false, query, ...rustRecallFailure(error) } };
+    return { ok: false, result: { ok: false, query, ...rustRecallFailure(error, transport) } };
   }
 }
 
