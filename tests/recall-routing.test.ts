@@ -48,7 +48,7 @@ describe("Rust recall routing", () => {
         content_top_k: 8,
         content_min_similarity: 0.3,
       },
-      options: { timeoutMs: 15000 },
+      options: { timeoutMs: 120000 },
     });
   });
 
@@ -60,7 +60,7 @@ describe("Rust recall routing", () => {
     };
     const controller = new AbortController();
     await recallWithRouting("room-dir", "example", "alpha", { signal: controller.signal });
-    expect(observed.options).toMatchObject({ signal: controller.signal, timeoutMs: 15000 });
+    expect(observed.options).toMatchObject({ signal: controller.signal, timeoutMs: 120000 });
     expect(observed.options.settleDefinitively).toBeUndefined();
   });
 

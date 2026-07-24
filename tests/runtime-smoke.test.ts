@@ -62,6 +62,7 @@ const tempRoots: string[] = [];
 const ENV_KEYS = [
   "SOLARISAEL_MEMORY_SOURCE",
   "SOLARISAEL_HOUSE_DISABLE_POSTGRES",
+  "SOLARISAEL_HOUSE_RUST",
   "SOLARISAEL_SUBSTRATE",
 ];
 
@@ -579,6 +580,7 @@ describe("OMP safe tool execute runtime smoke", () => {
 
     try {
       process.env.SOLARISAEL_SUBSTRATE = fakeSubstrate.dir;
+      delete process.env.SOLARISAEL_HOUSE_RUST;
 
       const add = await executeTool(
         tools,
@@ -727,6 +729,7 @@ describe("OMP safe tool execute runtime smoke", () => {
 
     try {
       process.env.SOLARISAEL_SUBSTRATE = fakeSubstrate.dir;
+      delete process.env.SOLARISAEL_HOUSE_RUST;
 
       const remember = await executeTool(
         tools,

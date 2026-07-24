@@ -378,7 +378,7 @@ export function closeRustRecallTransports() {
   }
 }
 
-const RECALL_TIMEOUT_MS = 15_000;
+const RECALL_TIMEOUT_MS = 120_000;
 
 function stringArray(value) {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
