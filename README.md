@@ -14,16 +14,19 @@ Start with the canonical House documentation:
 - OMP lifecycle hooks for room context and end-of-session continuity
 - House tools for room state, memory, recall, lessons, paper boats, and routing
 - room-local conversation logging and compact live context
-- automatic and agent-initiated recall through the canonical House core
+- a long-lived Rust transport for authoritative Full House memory operations
+- automatic and agent-initiated recall through the canonical House contracts
 - a hygiene extension for keeping host-generated context out of user-authored continuity
 - a private-data-free portable bundle, fictional starter room, and deterministic installation verifier
 - explicit Base, Full, and configured-but-degraded status for the optional [public substrate](https://github.com/solarisael/solarisael-house-substrate)
 
-The adapter fails open: an absent substrate is valid Base House, while a configured but unhealthy database or embedder is reported as degraded rather than mistaken for healthy Full House.
+The adapter remains TypeScript because it owns OMP lifecycle integration, room discovery, context shaping, packaging, and installation. Rust owns shared contracts and the authoritative Full House process. This is a Rust-first boundary, not a cosmetic rewrite.
+
+The adapter fails open: an absent substrate is valid Base House, while a configured but unhealthy database, embedder, or Rust executable is reported as degraded rather than mistaken for healthy Full House.
 
 ## Platform expectations
 
-The current guided portable release targets **Windows with OMP and Bun**. The Base House does not require PostgreSQL or a GPU. The optional Full House backend runs through WSL and is installed from the canonical [`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate) repository; see the House [installation protocol](https://github.com/solarisael/solarisael-house/blob/main/INSTALL.md) for the integration boundary.
+The current guided portable release targets **Windows with OMP, Bun, and the stable Rust MSVC toolchain**. Base House does not require PostgreSQL or a GPU. Full House adds a release-built Windows Rust substrate process connected to PostgreSQL and the embedding service in WSL. Install it from the canonical [`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate) repository; see the House [installation protocol](https://github.com/solarisael/solarisael-house/blob/main/INSTALL.md) for exact environment variables and mounted-tool proof.
 
 ## Build the portable bundle
 
