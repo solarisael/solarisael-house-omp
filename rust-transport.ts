@@ -40,6 +40,19 @@ export class RustTransportError extends Error {
   }
 }
 
+export class RustTransportOutcomeUnknownError extends Error {
+  readonly code = "AUTHORITATIVE_OUTCOME_UNKNOWN";
+  readonly retryable = false;
+  readonly cause?: Error;
+
+  constructor(cause?: Error) {
+    super("Rust transport authoritative outcome is unknown after request timeout or worker failure");
+    this.name = "RustTransportOutcomeUnknownError";
+    this.cause = cause;
+  }
+}
+
+
 class TransportUnavailableError extends Error {
   constructor(message: string, readonly stderr = "") {
     super(message);
@@ -47,6 +60,8 @@ class TransportUnavailableError extends Error {
   }
 }
 
+
+const DEFAULT_DEFINITIVE_TIMEOUT_MS = 120_000;
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
@@ -86,11 +101,13 @@ export class RustJsonlTransport {
     }
     this.stderrLimit = limit;
   }
-
   request(method: string, params: JsonObject, options: RequestOptions = {}): Promise<unknown> {
-    if (this.unusable) return Promise.reject(this.unusable);
+    if (this.unusable) {
+      if (this.unusable instanceof RustTransportOutcomeUnknownError) return Promise.reject(new TransportUnavailableError("Rust transport is unusable after an authoritative outcome became unknown"));
+      return Promise.reject(this.unusable);
+    }
     if (!method || typeof method !== "string") return Promise.reject(new Error("method must be a non-empty string"));
-    const timeout = options.timeoutMs;
+    const timeout = options.timeoutMs ?? (options.settleDefinitively === true ? DEFAULT_DEFINITIVE_TIMEOUT_MS : undefined);
     if (timeout !== undefined && (!Number.isFinite(timeout) || !Number.isInteger(timeout) || timeout < 0 || timeout > MAX_TIMEOUT_MS)) {
       return Promise.reject(new Error("timeoutMs must be a non-negative integer no greater than 2147483647"));
     }
@@ -110,13 +127,12 @@ export class RustJsonlTransport {
     }
     if (Buffer.byteLength(body) > MAX_QUEUED_BYTES) return Promise.reject(new Error("Rust transport request exceeds queue limit"));
     if (this.queuedBytes + Buffer.byteLength(body) > MAX_QUEUED_BYTES) return Promise.reject(new Error("Rust transport write queue limit exceeded"));
-
     this.ensureStarted();
     return new Promise((resolve, reject) => {
       const cancellable = options.settleDefinitively !== true;
       const pending: Pending = { resolve, reject, signal: options.signal, cancellable, dispatched: false };
       this.pending.set(id, pending);
-      if (cancellable && timeout !== undefined) pending.timer = setTimeout(() => this.abortRequest(id, new Error("Rust transport request timed out")), timeout);
+      if (timeout !== undefined) pending.timer = setTimeout(() => this.timeoutRequest(id), timeout);
       if (options.signal) {
         const onAbort = () => {
           if (!pending.cancellable && !pending.dispatched) this.cancelQueued(id, new Error("Rust transport request was cancelled"));
@@ -234,8 +250,22 @@ export class RustJsonlTransport {
     }
     this.pending.delete(id); this.clearPending(pending); pending.resolve(envelope.result);
   }
-
-  private rejectMatched(id: string, pending: Pending, error: Error): void { this.pending.delete(id); this.clearPending(pending); pending.reject(error); }
+  private timeoutRequest(id: string): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    if (!pending.dispatched) {
+      this.cancelQueued(id, new TransportUnavailableError("Rust transport request timed out before dispatch"));
+      return;
+    }
+    this.invalidate(pending.cancellable
+      ? new Error("Rust transport request timed out")
+      : new RustTransportOutcomeUnknownError());
+  }
+  private rejectMatched(id: string, pending: Pending, error: Error): void {
+    this.pending.delete(id);
+    this.clearPending(pending);
+    pending.reject(!pending.cancellable && pending.dispatched ? new RustTransportOutcomeUnknownError(error) : error);
+  }
 
   private cancelQueued(id: string, error: Error): void {
     const pending = this.pending.get(id);
@@ -257,16 +287,36 @@ export class RustJsonlTransport {
     if (pending.signal && pending.abortListener) pending.signal.removeEventListener("abort", pending.abortListener);
   }
 
+  private terminateChild(child: ChildProcessWithoutNullStreams): void {
+    try { child.stdin.end(); } catch {}
+    const fallback = setTimeout(() => {
+      if (child.killed) return;
+      if (process.platform === "win32" && child.pid) {
+        const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+        killer.unref();
+      } else {
+        child.kill();
+      }
+    }, 100);
+    fallback.unref();
+  }
+
   private invalidate(error: Error, kill = true): void {
     if (this.cleaned) return;
     this.cleaned = true; this.unusable = error;
     const child = this.child;
     if (child) {
       child.stdout.removeAllListeners(); child.stderr.removeAllListeners(); child.stdin.removeAllListeners(); child.removeAllListeners();
-      if (kill && !child.killed) child.kill();
+      if (kill) this.terminateChild(child);
     }
     this.writeQueue.length = 0; this.queuedBytes = 0; this.writing = false; this.blocked = false;
-    for (const pending of this.pending.values()) { this.clearPending(pending); pending.reject(error); }
+    for (const pending of this.pending.values()) {
+      this.clearPending(pending);
+      const rejection = pending.dispatched && !pending.cancellable && !(error instanceof RustTransportError) && !(error instanceof RustTransportOutcomeUnknownError)
+        ? new RustTransportOutcomeUnknownError(error)
+        : pending.dispatched ? error : new TransportUnavailableError("Rust transport became unusable before request dispatch", this.stderrDiagnostics);
+      pending.reject(rejection);
+    }
     this.pending.clear();
   }
 }

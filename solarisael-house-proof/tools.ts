@@ -1,5 +1,7 @@
 // Tool registration for the OMP adapter.
 // Silhouette: expose room/substrate tools; keep hook wiring out of tool bodies.
+import { createHash } from "node:crypto";
+ 
 
 import { compactRecall, recallWithRouting } from "./recall.ts";
 import {
@@ -23,10 +25,11 @@ import {
   writeLessonStore,
   writeSessionMemory,
 } from "./substrate.ts";
-import { RustJsonlTransport, RustTransportError } from "../rust-transport.ts";
+import { RustJsonlTransport, RustTransportError, RustTransportOutcomeUnknownError } from "../rust-transport.ts";
 import { discoverRustExecutable } from "../discovery.ts";
 import { dispatchWorker, laneStatus } from "./routing.ts";
 import { REMEMBER_STORES, buildStoreArgs } from "./stores.ts";
+import { WRITE_TIMEOUT_MS } from "./constants.ts";
 
 const rustRememberTransports = new Map<string, RustJsonlTransport>();
 
@@ -34,6 +37,11 @@ function rustRememberTransport(): RustJsonlTransport | null {
   const executable = discoverRustExecutable();
   if (!executable) return null;
   let transport = rustRememberTransports.get(executable);
+  if (transport && !transport.usable) {
+    rustRememberTransports.delete(executable);
+    transport.close();
+    transport = undefined;
+  }
   if (!transport) {
     transport = new RustJsonlTransport({ executable });
     rustRememberTransports.set(executable, transport);
@@ -47,43 +55,95 @@ function evictRustRememberTransport(executable: string, transport: RustJsonlTran
   transport.close();
 }
 
+function sourcePathKey(value: unknown): string {
+  return String(value ?? "").replace(/\\/g, "/").replace(/^house\//i, "").toLowerCase();
+}
+
+function deterministicMemorySourcePath(room: string, title: string, body: string, threads: unknown[], supersedes: unknown[]): string {
+  const canonical = JSON.stringify({ room, title, body, threads, supersedes });
+  const digest = createHash("sha256").update(canonical).digest("hex").slice(0, 24);
+  const baseline = memorySourcePath(title, new Date(0));
+  return baseline.replace(/^memory\/omp_[^_]+_/, `memory/omp_${digest}_`);
+}
+function isOutcomeUnknownError(error: unknown): boolean {
+  return error instanceof RustTransportOutcomeUnknownError;
+}
+
+async function reconcileRustMemory(room: string, sourcePath: string, signal?: AbortSignal) {
+  try {
+    const recalled = await recallWithRouting("", room, sourcePath, { signal });
+    if (!recalled.ok) return { reconciled: false, committed: null };
+    const result = recalled.result as Record<string, unknown>;
+    const collections = ["retrievalCandidates", "semanticChunks", "contentChunks", "dateMatches"];
+    const committed = collections.some((name) => (
+      Array.isArray(result[name])
+      && result[name].some((entry) => sourcePathKey((entry as Record<string, unknown>)?.source_path) === sourcePathKey(sourcePath))
+    ));
+    return { reconciled: true, committed };
+  } catch {
+    return { reconciled: false, committed: null };
+  }
+}
+
+function unknownWriteReceipt(error: unknown, sourcePath: string, reconciliation: { reconciled: boolean; committed: boolean | null }) {
+  return {
+    ok: false,
+    error: "Rust remember write outcome is unknown after dispatch",
+    code: "outcome_unknown",
+    outcome: "unknown",
+    retryable: true,
+    sourcePath,
+    reconciled: reconciliation.reconciled,
+    details: (error as { details?: unknown })?.details,
+  };
+}
+
+function unknownLessonReceipt(): Record<string, unknown> {
+  return {
+    ok: false,
+    error: "Rust lesson write outcome is unknown after dispatch",
+    code: "outcome_unknown",
+    outcome: "unknown",
+    retryable: true,
+  };
+}
+
 async function writeRustMemory({ room, title, body, threads, supersedes, signal }) {
   const executable = discoverRustExecutable();
   const transport = rustRememberTransport();
   if (!transport) return null;
+  const normalizeIdentityValues = (values: unknown) => [...new Set((Array.isArray(values) ? values : []).map(String).map((value) => value.trim()).filter(Boolean))].sort();
+  const normalizedThreads = normalizeIdentityValues(threads);
+  const normalizedSupersedes = normalizeIdentityValues(supersedes);
+  const sourcePath = deterministicMemorySourcePath(room, title, body, normalizedThreads, normalizedSupersedes);
   const params: Record<string, unknown> = {
-    room,
-    kind: "memory",
-    title,
-    body,
-    source_path: memorySourcePath(title),
-    threads: Array.isArray(threads) ? threads : [],
-    supersedes: [...new Set((Array.isArray(supersedes) ? supersedes : []).map(String))],
+    room, kind: "memory", title, body, source_path: sourcePath,
+    threads: normalizedThreads,
+    supersedes: normalizedSupersedes,
     backup: false,
   };
   try {
     const receipt = await transport.request("remember", params, {
-      signal: signal || undefined,
-      settleDefinitively: true,
+      signal: signal || undefined, timeoutMs: WRITE_TIMEOUT_MS, settleDefinitively: true,
     });
     if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
       evictRustRememberTransport(executable, transport);
-      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+      return unknownWriteReceipt(new RustTransportOutcomeUnknownError(), sourcePath, await reconcileRustMemory(room, sourcePath, signal));
     }
     const value = receipt as Record<string, unknown>;
-    if (
-      typeof value.memory_id !== "number"
-      || typeof value.room !== "string"
-      || typeof value.source_path !== "string"
-      || value.durable !== true
-      || value.authority !== "postgres"
-      || !Array.isArray(value.warnings)
-    ) {
+    if (typeof value.memory_id !== "number" || typeof value.room !== "string"
+      || typeof value.source_path !== "string" || value.durable !== true
+      || value.authority !== "postgres" || !Array.isArray(value.warnings)
+      || !value.warnings.every((warning) => typeof warning === "string")) {
       evictRustRememberTransport(executable, transport);
-      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+      return unknownWriteReceipt(new RustTransportOutcomeUnknownError(), sourcePath, await reconcileRustMemory(room, sourcePath, signal));
     }
     return { ok: true, ...value, id: value.memory_id, sourcePath: value.source_path };
   } catch (error) {
+    if (isOutcomeUnknownError(error)) {
+      evictRustRememberTransport(executable, transport);
+      return unknownWriteReceipt(error, sourcePath, await reconcileRustMemory(room, sourcePath, signal));
+    }
     if (!transport.usable) evictRustRememberTransport(executable, transport);
     if (error instanceof RustTransportError) {
       return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
@@ -97,41 +157,39 @@ async function writeRustLesson({ room, kind, title, body, fields, backup, signal
   const transport = rustRememberTransport();
   if (!transport) return null;
   const params: Record<string, unknown> = {
-    room,
-    kind,
-    title,
-    body,
-    shape: fields.shape ?? null,
-    voice: fields.voice ?? null,
-    scope: fields.scope ?? null,
-    project: fields.project ?? null,
-    proofPattern: fields.proofPattern ?? null,
-    triggerContext: fields.triggerContext ?? null,
-    tags: Array.isArray(fields.tags) ? fields.tags : [],
-    backup,
+    room, kind, title, body, shape: fields.shape ?? null, voice: fields.voice ?? null,
+    scope: fields.scope ?? null, project: fields.project ?? null,
+    proofPattern: fields.proofPattern ?? null, triggerContext: fields.triggerContext ?? null,
+    tags: Array.isArray(fields.tags) ? fields.tags : [], backup,
   };
   try {
     const receipt = await transport.request("remember", params, {
-      signal: signal || undefined,
-      settleDefinitively: true,
+      signal: signal || undefined, timeoutMs: WRITE_TIMEOUT_MS, settleDefinitively: true,
     });
     if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
       evictRustRememberTransport(executable, transport);
-      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+      return unknownLessonReceipt();
     }
     const value = receipt as Record<string, unknown>;
-    if (
-      typeof value.lesson_id !== "number"
-      || value.kind !== kind
-      || value.durable !== true
-      || value.authority !== "postgres"
-      || !Array.isArray(value.warnings)
-    ) {
+    if (typeof value.lesson_id !== "number" || value.kind !== kind || value.durable !== true
+      || value.authority !== "postgres" || !Array.isArray(value.warnings)
+      || !value.warnings.every((warning) => typeof warning === "string")) {
       evictRustRememberTransport(executable, transport);
-      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+      return unknownLessonReceipt();
     }
     return { ok: true, ...value, id: value.lesson_id };
   } catch (error) {
+    if (isOutcomeUnknownError(error)) {
+      evictRustRememberTransport(executable, transport);
+      return {
+        ok: false,
+        error: "Rust lesson write outcome is unknown after dispatch",
+        code: "outcome_unknown",
+        outcome: "unknown",
+        retryable: true,
+        details: error instanceof RustTransportError ? error.details : undefined,
+      };
+    }
     if (!transport.usable) evictRustRememberTransport(executable, transport);
     if (error instanceof RustTransportError) {
       return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };
@@ -139,7 +197,6 @@ async function writeRustLesson({ room, kind, title, body, fields, backup, signal
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
-
 async function writeRustAnamnesis({ room, payload, signal }) {
   const executable = discoverRustExecutable();
   const transport = rustRememberTransport();
@@ -148,31 +205,32 @@ async function writeRustAnamnesis({ room, payload, signal }) {
   const params = { room, ...payload };
   try {
     const receipt = await transport.request("anamnesis_write", params, {
-      signal: signal || undefined,
-      settleDefinitively: true,
+      signal: signal || undefined, timeoutMs: WRITE_TIMEOUT_MS, settleDefinitively: true,
     });
     if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
       evictRustRememberTransport(executable, transport);
-      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+      return { ok: false, error: "Rust anamnesis write outcome is unknown after dispatch", code: "outcome_unknown", outcome: "unknown", retryable: true };
     }
     const value = receipt as Record<string, unknown>;
-    if (
-      value.ok !== true
-      || value.operation !== operation
-      || value.room !== room
+    if (value.ok !== true || value.operation !== operation || value.room !== room
       || typeof value.title !== "string"
-      || (operation === "add" && (value.kind !== "pillar" && value.kind !== "cycle"))
-      || (operation === "append-rep" && (!Number.isInteger(value.repNumber) || value.repNumber < 1))
-      || value.durable !== true
-      || value.authority !== "postgres"
-      || !Array.isArray(value.warnings)
-      || !value.warnings.every((warning) => typeof warning === "string")
-    ) {
+      || (operation === "add" && value.kind !== "pillar" && value.kind !== "cycle")
+      || (operation === "append-rep" && (!Number.isInteger(value.repNumber) || Number(value.repNumber) < 1))
+      || value.durable !== true || value.authority !== "postgres"
+      || !Array.isArray(value.warnings) || !value.warnings.every((warning) => typeof warning === "string")) {
       evictRustRememberTransport(executable, transport);
-      return { ok: false, error: "invalid_receipt", code: "invalid_receipt" };
+      return { ok: false, error: "Rust anamnesis write outcome is unknown after dispatch", code: "outcome_unknown", outcome: "unknown", retryable: true };
     }
     return { ok: true, ...value };
   } catch (error) {
+    if (isOutcomeUnknownError(error)) {
+      evictRustRememberTransport(executable, transport);
+      return {
+        ok: false, error: "Rust anamnesis write outcome is unknown after dispatch",
+        code: "outcome_unknown", outcome: "unknown", retryable: true,
+        details: error instanceof RustTransportError ? error.details : undefined,
+      };
+    }
     if (!transport.usable) evictRustRememberTransport(executable, transport);
     if (error instanceof RustTransportError) {
       return { ok: false, error: error.message, code: error.code, retryable: error.retryable, details: error.details };

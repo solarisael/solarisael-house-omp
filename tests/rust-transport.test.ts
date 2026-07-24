@@ -105,7 +105,7 @@ describe("Rust JSONL transport", () => {
     const controller = new AbortController();
     const response = client.request("remember", { value: "committed" }, {
       signal: controller.signal,
-      timeoutMs: 1,
+      timeoutMs: 1000,
       settleDefinitively: true,
     });
     setTimeout(() => controller.abort(), 5);
@@ -123,6 +123,22 @@ describe("Rust JSONL transport", () => {
     expect(records).not.toContain("not-sent");
     client.close();
     await rm(recordFile, { force: true });
+  }));
+
+  test("definitive timeout reports unknown outcome and evicts the worker", async () => withFixture("delayed", async (file) => {
+    const client = transport(file, "delayed");
+    const started = performance.now();
+    const response = client.request("remember", { value: "uncertain" }, {
+      timeoutMs: 10,
+      settleDefinitively: true,
+    });
+    const error = await response.catch((reason) => reason);
+    const elapsed = performance.now() - started;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toContain("authoritative outcome is unknown");
+    expect(elapsed).toBeLessThan(250);
+    expect(client.usable).toBe(false);
+    await expect(client.request("remember", { value: "must-not-reuse" })).rejects.toThrow("unusable");
   }));
 
   test("bounds concurrent pending requests", async () => withFixture("out-of-order", async (file) => {

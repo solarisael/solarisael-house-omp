@@ -1,7 +1,7 @@
 import { describe, expect, test, afterEach } from "bun:test";
 
 import solarisaelHouseProof from "../index.ts";
-import { RustJsonlTransport } from "../rust-transport.ts";
+import { RustJsonlTransport, RustTransportError, RustTransportOutcomeUnknownError } from "../rust-transport.ts";
 import { closeRustRecallTransports, recallWithRouting } from "../solarisael-house-proof/recall.ts";
 import { closeRustRememberTransports } from "../solarisael-house-proof/tools.ts";
 type CapturedTool = {
@@ -212,6 +212,59 @@ describe("OMP adapter registration", () => {
     }
   });
 
+  test("returns an outcome-unknown receipt and reconciles a committed memory", async () => {
+    const originalRust = process.env.SOLARISAEL_HOUSE_RUST;
+    const originalRequest = RustJsonlTransport.prototype.request;
+    const originalClose = RustJsonlTransport.prototype.close;
+    let sourcePath = "";
+    let closed = 0;
+    process.env.SOLARISAEL_HOUSE_RUST = process.execPath;
+    closeRustRecallTransports();
+    RustJsonlTransport.prototype.request = async function (method, params) {
+      if (method === "remember") {
+        sourcePath = String(params.source_path);
+        throw new RustTransportOutcomeUnknownError();
+      }
+      return {
+        ok: true, query: String(params.query), found: true, source: "rust-postgres",
+        retrievalCandidates: [{
+          source_path: sourcePath, title: "same memory", heading_path: "",
+          excerpt: "Concrete committed body.", sources: [sourcePath], score: 1,
+          term_coverage: 1, matched_terms: ["same"], missing_terms: [], reasons: ["exact source path"],
+        }],
+        semanticChunks: [], contentChunks: [{ source_path: sourcePath }], dateMatches: [],
+        canonMatches: [], queryDates: [], taxonomy: { memoryTypes: [], threadKeys: [], namedEntities: [] },
+      };
+    };
+    RustJsonlTransport.prototype.close = function () {
+      closed += 1;
+      return originalClose.call(this);
+    };
+    try {
+      const { tools } = registerAdapter();
+      const remember = toolMap(tools).remember;
+      const result = await remember.execute?.("call", {
+        title: "same memory",
+        body: "Concrete committed body.",
+        kind: "memory",
+      }, undefined, undefined, { cwd: "room-dir" });
+      expect(result?.details).toMatchObject({
+        ok: false,
+        code: "outcome_unknown",
+        outcome: "unknown",
+        sourcePath: expect.stringContaining("memory/omp_"),
+      });
+      expect(closed).toBe(1);
+    } finally {
+      closeRustRecallTransports();
+      closeRustRememberTransports();
+      RustJsonlTransport.prototype.request = originalRequest;
+      RustJsonlTransport.prototype.close = originalClose;
+      if (originalRust === undefined) delete process.env.SOLARISAEL_HOUSE_RUST;
+      else process.env.SOLARISAEL_HOUSE_RUST = originalRust;
+    }
+  });
+
   test("exposes the OMP parameter schemas for each registered tool", () => {
     const { tools } = registerAdapter();
     const schemas = Object.fromEntries(
@@ -383,7 +436,7 @@ describe("OMP adapter registration", () => {
       calls += 1;
       if (calls === 1) {
         Object.defineProperty(this, "usable", { value: false });
-        throw new Error("worker exited");
+        throw new RustTransportOutcomeUnknownError();
       }
       return { lesson_id: 7, kind: "coding-lesson", durable: true, authority: "postgres", warnings: [] };
     };
@@ -394,7 +447,7 @@ describe("OMP adapter registration", () => {
     try {
       const remember = toolMap(registerAdapter().tools).remember;
       const failed = await remember.execute!("remember-failed", { title: "Failure", body: "No fallback", kind: "coding-lesson" }, undefined, undefined, { cwd: process.cwd() });
-      expect(failed.details).toMatchObject({ ok: false, error: "worker exited" });
+      expect(failed.details).toMatchObject({ ok: false, code: "outcome_unknown", outcome: "unknown" });
       const recovered = await remember.execute!("remember-recovered", { title: "Recovery", body: "Respawn", kind: "coding-lesson" }, undefined, undefined, { cwd: process.cwd() });
       expect(recovered.details).toMatchObject({ ok: true, lesson_id: 7, id: 7 });
       expect(calls).toBe(2);
