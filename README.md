@@ -1,14 +1,14 @@
 # Solarisael House — OMP adapter
 
-**your OMP room, with memory that doesn't evaporate — start at the [House hub](https://github.com/solarisael/solarisael-house).**
+**your OMP room, with memory that doesn't evaporate — start at the [House hub](https://github.com/solarisael/the-athanor).**
 This repository is the Solarisael House adapter for [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi).
 
 start at the canonical House docs:
 
-- [What Solarisael House is](https://github.com/solarisael/solarisael-house#readme)
-- [AI-guided OMP installation](https://github.com/solarisael/solarisael-house/blob/main/INSTALL.md)
-- [Room identity guide](https://github.com/solarisael/solarisael-house/blob/main/IDENTITY_GUIDE.md)
-- [How to use the House day to day](https://github.com/solarisael/solarisael-house/blob/main/USAGE.md)
+- [What Solarisael House is](https://github.com/solarisael/the-athanor#readme)
+- [AI-guided OMP installation](https://github.com/solarisael/the-athanor/blob/main/INSTALL.md)
+- [Room identity guide](https://github.com/solarisael/the-athanor/blob/main/IDENTITY_GUIDE.md)
+- [How to use the House day to day](https://github.com/solarisael/the-athanor/blob/main/USAGE.md)
 
 ## What this adapter adds
 
@@ -27,7 +27,7 @@ The adapter fails open: an absent substrate is valid Vault mode, while a configu
 
 ## Platform expectations
 
-The current guided portable release targets **Windows with OMP, Bun, and the stable Rust MSVC toolchain**. Vault does not require PostgreSQL or a GPU. AKASHA adds a release-built Windows Rust substrate process connected to PostgreSQL and the embedding service in WSL. Install it from the canonical [`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate) repository; see the House [installation protocol](https://github.com/solarisael/solarisael-house/blob/main/INSTALL.md) for exact environment variables and mounted-tool proof.
+The current guided portable release targets **Windows with OMP, Bun, and the stable Rust MSVC toolchain**. Vault does not require PostgreSQL or a GPU. AKASHA adds a release-built Windows Rust substrate process connected to PostgreSQL and the embedding service in WSL. Install it from the canonical [`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate) repository; see the House [installation protocol](https://github.com/solarisael/the-athanor/blob/main/INSTALL.md) for exact environment variables and mounted-tool proof.
 
 ## Build the portable bundle
 
