@@ -25,6 +25,37 @@ export interface GuiServerOptions {
 }
 export interface GuiServerHandle { server: ReturnType<typeof createServer>; csrfToken: string; port: number; close(): Promise<void> }
 
+type JsonRecord = Record<string, unknown>;
+function isRecord(value: unknown): value is JsonRecord { return !!value && typeof value === "object" && !Array.isArray(value); }
+function canonicalError(error: unknown, operation?: string): JsonRecord {
+  const unknown = isRecord(error) && error.code === "AUTHORITATIVE_OUTCOME_UNKNOWN";
+  if (isRecord(error) && typeof error.code === "string" && typeof error.message === "string" && typeof error.retryable === "boolean" && (!unknown || error.details !== undefined)) {
+    return error.details === undefined
+      ? { code: error.code, message: error.message, retryable: error.retryable }
+      : { code: error.code, message: error.message, retryable: error.retryable, details: error.details };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const dispatched = !/spawn|startup|unavailable/i.test(message);
+  return {
+    code: unknown ? "AUTHORITATIVE_OUTCOME_UNKNOWN" : "GUI_TRANSPORT_FAILURE",
+    message,
+    retryable: false,
+    details: {
+      category: "transport",
+      stage: dispatched ? "request_write" : "spawn",
+      ...(operation ? { operation } : {}),
+      owner: { component: "gui-server", path: "gui-server.ts", symbol: "createGuiServer" },
+      observed: { error_name: error instanceof Error ? error.name : typeof error },
+      evidence: [],
+      targets: ["gui-server.ts#createGuiServer"],
+      next_checks: [{ action: unknown ? "reconcile" : "inspect", target: "gui-server.ts#createGuiServer" }],
+      execution: { request_dispatched: dispatched, write_outcome: unknown ? "unknown" : "not_started", retry: unknown ? "reconcile_first" : "never" },
+    },
+  };
+}
+function errorResponse(res: ServerResponse, status: number, error: unknown, operation?: string) {
+  json(res, status, { ok: false, error: canonicalError(error, operation) });
+}
 function json(res: ServerResponse, status: number, value: unknown) {
   const body = JSON.stringify(value);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
@@ -77,7 +108,7 @@ export function createGuiServer(options: GuiServerOptions): GuiServerHandle {
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/transport|child exited|closed|unusable|output line/i.test(message)) { transport.close(); transport = new RustJsonlTransport({ executable: options.executable, args: options.args, cwd: options.cwd }); }
-      throw error;
+      throw canonicalError(error, method);
     }
   };
   const root = resolve(options.cwd ?? process.cwd(), "gui");
@@ -98,7 +129,7 @@ export function createGuiServer(options: GuiServerOptions): GuiServerHandle {
       }
       if (req.method === "GET" && url.pathname === "/api/health") {
         try { const result = await requestRust("cluster_maintenance", { operation: "check", room: options.room ?? "gui" }, { timeoutMs: 15000 }); json(res, 200, { ok: true, status: "running", cluster: result }); }
-        catch (e) { json(res, 503, { ok: false, status: "unhealthy", error: e instanceof Error ? e.message : String(e) }); }
+        catch (e) { errorResponse(res, 503, e, "cluster_maintenance"); }
         return;
       }
       if (req.method === "POST" && (url.pathname === "/api/rpc" || url.pathname === "/api/backup" || url.pathname === "/api/restore")) {
@@ -139,7 +170,7 @@ export function createGuiServer(options: GuiServerOptions): GuiServerHandle {
         const data = await readFile(file); res.setHeader("content-type", MIME[extname(file)] ?? "application/octet-stream"); res.end(data); return;
       }
       json(res, 404, { ok: false, error: "not found" });
-    } catch (e: any) { json(res, e?.status === 413 ? 413 : 500, { ok: false, error: e instanceof Error ? e.message : String(e) }); }
+    } catch (e: any) { errorResponse(res, e?.status === 413 ? 413 : 500, e); }
   });
   return { server, csrfToken, port: options.port ?? 0, close: async () => { transport.close(); await new Promise<void>(resolveClose => server.close(() => resolveClose())); } };
 }

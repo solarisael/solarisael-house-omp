@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { startGuiServer } from "../gui-server.ts";
 
-const fake = `process.stdin.setEncoding('utf8'); process.stdin.on('data', d => { for (const line of d.split('\\n')) { if (!line) continue; const x=JSON.parse(line); process.stdout.write(JSON.stringify({protocol:1,id:x.id,result:{ok:true,method:x.method,params:x.params}})+'\\n'); } });`;
+const fake = `process.stdin.setEncoding('utf8'); process.stdin.on('data', d => { for (const line of d.split('\\n')) { if (!line) continue; const x=JSON.parse(line); const error=x.params.fail ? {code:'DATABASE_WRITE_FAILED',message:'Write rolled back',retryable:true,details:{owner:{component:'substrate',path:'src/store.rs',symbol:'write_memory'},evidence:[{severity:'warning',summary:'transaction rolled back'}],targets:['src/store.rs#write_memory'],next_checks:[{action:'inspect',target:'src/store.rs#write_memory'}],execution:{request_dispatched:true,write_outcome:'rolled_back',retry:'safe_now'}}} : null; process.stdout.write(JSON.stringify(error ? {protocol:1,id:x.id,error} : {protocol:1,id:x.id,result:{ok:true,method:x.method,params:x.params}})+'\\n'); } });`;
 
 describe("GUI server security boundary", () => {
   let handle: Awaited<ReturnType<typeof startGuiServer>>;
@@ -29,6 +29,24 @@ describe("GUI server security boundary", () => {
     const health = await fetch(origin + "/api/health");
     expect(health.status).toBe(200);
     expect((await health.json() as any).cluster.params).toEqual({ operation: "check", room: "gui" });
+  });
+  test("preserves canonical diagnostic errors for the GUI", async () => {
+    const origin = `http://127.0.0.1:${handle.port}`;
+    const response = await fetch(origin + "/api/rpc", { method: "POST", headers: { "x-csrf-token": handle.csrfToken, "content-type": "application/json", origin }, body: JSON.stringify({ method: "remember", params: { fail: true } }) });
+    expect(response.status).toBe(500);
+    const payload = await response.json() as any;
+    expect(payload.error).toEqual({
+      code: "DATABASE_WRITE_FAILED",
+      message: "Write rolled back",
+      retryable: true,
+      details: {
+        owner: { component: "substrate", path: "src/store.rs", symbol: "write_memory" },
+        evidence: [{ severity: "warning", summary: "transaction rolled back" }],
+        targets: ["src/store.rs#write_memory"],
+        next_checks: [{ action: "inspect", target: "src/store.rs#write_memory" }],
+        execution: { request_dispatched: true, write_outcome: "rolled_back", retry: "safe_now" },
+      },
+    });
   });
   test("closes cleanly", async () => { await handle.close(); });
 });
