@@ -1,8 +1,9 @@
 # Solarisael House — OMP adapter
 
-The recommended [Solarisael House](https://github.com/solarisael/solarisael-house) bridge for [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi).
+**your OMP room, with memory that doesn't evaporate — start at the [House hub](https://github.com/solarisael/solarisael-house).**
+This repository is the Solarisael House adapter for [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi).
 
-Start with the canonical House documentation:
+start at the canonical House docs:
 
 - [What Solarisael House is](https://github.com/solarisael/solarisael-house#readme)
 - [AI-guided OMP installation](https://github.com/solarisael/solarisael-house/blob/main/INSTALL.md)
@@ -14,19 +15,19 @@ Start with the canonical House documentation:
 - OMP lifecycle hooks for room context and end-of-session continuity
 - House tools for room state, memory, recall, lessons, paper boats, and routing
 - room-local conversation logging and compact live context
-- a long-lived Rust transport for authoritative Full House memory operations
+- a long-lived Rust transport for authoritative AKASHA memory operations
 - automatic and agent-initiated recall through the canonical House contracts
 - a hygiene extension for keeping host-generated context out of user-authored continuity
 - a private-data-free portable bundle, fictional starter room, and deterministic installation verifier
-- explicit Base, Full, and configured-but-degraded status for the optional [public substrate](https://github.com/solarisael/solarisael-house-substrate)
+- explicit Vault, AKASHA, and configured-but-degraded status for the optional [public substrate](https://github.com/solarisael/solarisael-house-substrate)
 
-The adapter remains TypeScript because it owns OMP lifecycle integration, room discovery, context shaping, packaging, and installation. Rust owns shared contracts and the authoritative Full House process. This is a Rust-first boundary, not a cosmetic rewrite.
+The adapter stays TypeScript for OMP lifecycle integration, room discovery, context shaping, packaging, and installation. Rust owns shared contracts and the authoritative AKASHA process. Rust-first, because the boundary is real.
 
-The adapter fails open: an absent substrate is valid Base House, while a configured but unhealthy database, embedder, or Rust executable is reported as degraded rather than mistaken for healthy Full House.
+The adapter fails open: an absent substrate is valid Vault mode, while a configured but unhealthy database, embedder, or Rust executable is reported as degraded rather than mistaken for healthy AKASHA.
 
 ## Platform expectations
 
-The current guided portable release targets **Windows with OMP, Bun, and the stable Rust MSVC toolchain**. Base House does not require PostgreSQL or a GPU. Full House adds a release-built Windows Rust substrate process connected to PostgreSQL and the embedding service in WSL. Install it from the canonical [`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate) repository; see the House [installation protocol](https://github.com/solarisael/solarisael-house/blob/main/INSTALL.md) for exact environment variables and mounted-tool proof.
+The current guided portable release targets **Windows with OMP, Bun, and the stable Rust MSVC toolchain**. Vault does not require PostgreSQL or a GPU. AKASHA adds a release-built Windows Rust substrate process connected to PostgreSQL and the embedding service in WSL. Install it from the canonical [`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate) repository; see the House [installation protocol](https://github.com/solarisael/solarisael-house/blob/main/INSTALL.md) for exact environment variables and mounted-tool proof.
 
 ## Build the portable bundle
 
@@ -43,8 +44,8 @@ The private-data-free archive is written to:
 dist/solarisael-house-portable.zip
 ```
 
-The archive remains a complete Base House bundle. It does not carry a partial
-copy of the Full backend; Full operators install the canonical
+The archive remains a complete Vault bundle. It does not carry a partial
+copy of the AKASHA backend; AKASHA operators install the canonical
 [`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate)
 repository separately.
 
