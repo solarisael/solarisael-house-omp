@@ -6,7 +6,7 @@ export const ADAPTER_API_VERSION = 1;
 // shaped modules under ./solarisael-house-proof/ so this door only wires hooks.
 
 import { isFreshConversation, logUnseenConversationTurns } from "./solarisael-house-proof/conversation-log.ts";
-import { closeRustRecallTransports } from "./solarisael-house-proof/recall.ts";
+import { closeRustRecallTransports, compactRecall, recallWithRouting } from "./solarisael-house-proof/recall.ts";
 import { closeRustRememberTransports } from "./solarisael-house-proof/tools.ts";
 import { closeRustAnamnesisTransports } from "./solarisael-house-proof/anamnesis.ts";
 import { loadHouseQueryRouting } from "./solarisael-house-proof/core.ts";
@@ -27,6 +27,123 @@ import { contextNudge, keywordReminder, processLessonsReminder } from "./solaris
 const wokenSessions = new Set();
 const modelDefaultsApplied = new Set();
 const recallViewportSessions = new Map();
+
+const REDACTED = "[REDACTED]";
+const DIAGNOSTIC_TEXT_LIMIT = 2_000;
+const SENSITIVE_DIAGNOSTIC_KEY = /(?:authorization|cookie|password|secret|token|api[_-]?key|prompt|query|payload|body|stdin|url)/i;
+
+function diagnosticRecord(value: unknown): Record<string, any> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : null;
+}
+
+function redactDiagnosticText(value: unknown, privateValues: unknown[] = []): string | null {
+  if (value == null) return null;
+  let text = String(value);
+  for (const privateValue of privateValues) {
+    const privateText = typeof privateValue === "string" ? privateValue : "";
+    if (privateText) text = text.replaceAll(privateText, REDACTED);
+  }
+  return text
+    .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
+    .replace(/\b([a-z][a-z\d+.-]*):\/\/[^/\s:@]+(?::[^@\s]*)?@/gi, "$1://[REDACTED]@")
+    .replace(/\b(password|secret|token|api[_-]?key|authorization)\s*[=:]\s*\S+/gi, "$1=[REDACTED]")
+    .slice(0, DIAGNOSTIC_TEXT_LIMIT);
+}
+
+function redactDiagnosticValue(value: unknown, privateValues: unknown[] = [], depth = 0): unknown {
+  if (depth >= 6) return "[TRUNCATED]";
+  if (typeof value === "string") return redactDiagnosticText(value, privateValues);
+  if (Array.isArray(value)) return value.slice(0, 24).map((item) => redactDiagnosticValue(item, privateValues, depth + 1));
+  const record = diagnosticRecord(value);
+  if (!record) return value;
+  return Object.fromEntries(Object.entries(record).map(([key, item]) => [
+    key,
+    SENSITIVE_DIAGNOSTIC_KEY.test(key) ? REDACTED : redactDiagnosticValue(item, privateValues, depth + 1),
+  ]));
+}
+
+function automaticContextDiagnostic({
+  operation,
+  stage,
+  error,
+  failure,
+  route = null,
+  requestDispatched,
+}: {
+  operation: string;
+  stage: string;
+  error: unknown;
+  failure?: unknown;
+  route?: Record<string, any> | null;
+  requestDispatched: boolean;
+}): Record<string, unknown> {
+  const privateValues = [route?.recallQuery];
+  const source = diagnosticRecord(failure);
+  const sourceDetails = diagnosticRecord(source?.details);
+  const inherited = redactDiagnosticValue(sourceDetails, privateValues) as Record<string, any> | null;
+  const sourceExecution = diagnosticRecord(sourceDetails?.execution);
+  const sourceRetryable = source?.retryable ?? sourceDetails?.retryable;
+  const childCause = redactDiagnosticValue({
+    error: source?.error ?? error,
+    code: source?.code,
+    signal: source?.signal,
+    timed_out: source?.timedOut,
+    spawn_error: source?.spawnError,
+    fallback: source?.fallback,
+    diagnostic: source?.diagnostic,
+  }, privateValues);
+  const inheritedEvidence = Array.isArray(inherited?.evidence) ? inherited.evidence : [];
+  const execution = {
+    request_dispatched: typeof sourceExecution?.request_dispatched === "boolean"
+      ? sourceExecution.request_dispatched
+      : requestDispatched,
+    write_outcome: ["not_started", "rolled_back", "committed", "unknown"].includes(String(sourceExecution?.write_outcome))
+      ? sourceExecution.write_outcome
+      : "not_started",
+    retry: ["safe_now", "after_change", "reconcile_first", "never"].includes(String(sourceExecution?.retry))
+      ? sourceExecution.retry
+      : sourceRetryable === true ? "safe_now" : "after_change",
+  };
+  const target = operation === "automatic_process_lessons"
+    ? "solarisael-house-proof/triggers.ts:processLessonsReminder"
+    : "solarisael-house-proof/recall.ts:recallWithRouting";
+
+  return {
+    ...inherited,
+    code: String(source?.code || sourceDetails?.code || `AUTO_CONTEXT_${operation.toUpperCase()}_FAILED`),
+    category: sourceDetails?.category || "operation",
+    stage: sourceDetails?.stage || stage,
+    operation,
+    owner: { component: "omp-adapter", path: "index.ts", symbol: "solarisaelHouseProof context hook" },
+    expected: {
+      hidden_context: true,
+      display: false,
+      outcome: "injected_or_fail_open",
+    },
+    observed: {
+      outcome: "failed_open",
+      route_intent: route?.intent || null,
+      route_should_auto_recall: route?.shouldAutoRecall === true,
+    },
+    evidence: [...inheritedEvidence, { kind: "automatic_context_failure", cause: childCause }],
+    targets: ["index.ts:solarisaelHouseProof", target],
+    next_checks: [
+      { action: "inspect", target },
+      { action: "retry", condition: execution.retry },
+    ],
+    execution,
+  };
+}
+
+async function recordAutomaticContextTelemetry(
+  input: Parameters<typeof recordRecallTelemetry>[0] & { diagnostic?: Record<string, unknown> },
+): Promise<boolean> {
+  const { diagnostic, ...telemetry } = input;
+  return recordRecallTelemetry({
+    ...telemetry,
+    viewportDiagnostics: diagnostic || telemetry.viewportDiagnostics,
+  });
+}
 
 export default function solarisaelHouseProof(pi) {
   pi.setLabel("Solarisael House");
@@ -193,7 +310,22 @@ export default function solarisaelHouseProof(pi) {
             timestamp,
           });
         }
-      } catch {
+      } catch (error) {
+        await recordAutomaticContextTelemetry({
+          effectiveRoomDir,
+          sessionId: ctx?.sessionID || ctx?.sessionId,
+          room,
+          prompt,
+          route: null,
+          status: "error",
+          error: redactDiagnosticText(error),
+          diagnostic: automaticContextDiagnostic({
+            operation: "automatic_process_lessons",
+            stage: "request_parse",
+            error,
+            requestDispatched: true,
+          }),
+        }).catch(() => undefined);
         // Process-shape lessons are advisory only. Tooling must fail open.
       }
     }
@@ -263,15 +395,23 @@ export default function solarisaelHouseProof(pi) {
               viewportDiagnostics: viewport.diagnostics,
             });
           } else {
-            await recordRecallTelemetry({
+            await recordAutomaticContextTelemetry({
               effectiveRoomDir,
               sessionId: ctx?.sessionID || ctx?.sessionId,
               room,
               prompt,
               route: queryRoute,
               status: "error",
-              error: recalled.result?.error || "recall failed",
-            });
+              error: redactDiagnosticText(recalled.result?.error || "recall failed", [queryRoute?.recallQuery, prompt]),
+              diagnostic: automaticContextDiagnostic({
+                operation: "automatic_recall",
+                stage: "request_parse",
+                error: recalled.result?.error || "recall failed",
+                failure: recalled.result,
+                route: queryRoute,
+                requestDispatched: true,
+              }),
+            }).catch(() => undefined);
           }
         } else {
           await recordRecallTelemetry({
@@ -284,14 +424,21 @@ export default function solarisaelHouseProof(pi) {
           });
         }
       } catch (error) {
-        await recordRecallTelemetry({
+        await recordAutomaticContextTelemetry({
           effectiveRoomDir,
           sessionId: ctx?.sessionID || ctx?.sessionId,
           room,
           prompt,
           route: queryRoute,
           status: "error",
-          error,
+          error: redactDiagnosticText(error, [queryRoute?.recallQuery, prompt]),
+          diagnostic: automaticContextDiagnostic({
+            operation: "automatic_recall",
+            stage: queryRoute ? "request_parse" : "configuration_load",
+            error,
+            route: queryRoute,
+            requestDispatched: Boolean(queryRoute?.shouldAutoRecall),
+          }),
         }).catch(() => undefined);
         // Context injection must fail open. Manual recall remains available.
       }

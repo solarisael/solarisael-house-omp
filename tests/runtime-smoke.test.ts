@@ -390,6 +390,44 @@ describe("OMP context hook runtime smoke", () => {
         .toEqual({ enabled: true });
     });
   });
+
+  test("fails open while retaining redacted automatic recall diagnostics", async () => {
+    const { cwd } = await makeTempRoom("automatic-context-diagnostic");
+    await writeJson(path.join(cwd, ".solarisael-room.json"), {
+      version: 1,
+      room: "automatic-context-diagnostic",
+      recallTelemetry: true,
+    });
+    const snapshot = snapshotEnv();
+    const prompt = "Recall the automatic diagnostic sentinel with token=private-value.";
+    try {
+      process.env.SOLARISAEL_HOUSE_RUST = process.execPath;
+      const { hooks } = registerAdapter();
+      const contextHook = hooks.find((hook) => hook.name === "context")?.handler;
+      if (!contextHook) throw new Error("Context hook was not registered");
+
+      const messages = [{ role: "user", id: "automatic-context-diagnostic", content: prompt }];
+      const result = await contextHook({ messages }, { cwd, sessionID: "automatic-context-diagnostic" });
+      const additions = (result?.messages.slice(messages.length) || []) as Array<Record<string, unknown>>;
+      expect(additions.every((message) => message.display === false)).toBe(true);
+      expect(additions.map((message) => message.customType)).not.toContain("solarisael-recall-context");
+
+      const telemetry = JSON.parse(await readFile(recallTelemetryPath(cwd), "utf8").then((source) => source.trim()));
+      expect(telemetry).toMatchObject({
+        status: "error",
+        viewport_diagnostics: {
+          operation: "automatic_recall",
+          owner: { component: "omp-adapter", path: "index.ts" },
+          execution: { request_dispatched: true, write_outcome: "not_started" },
+        },
+      });
+      expect(JSON.stringify(telemetry)).not.toContain(prompt);
+      expect(JSON.stringify(telemetry)).not.toContain("private-value");
+      expect(telemetry.viewport_diagnostics.evidence.some((entry: Record<string, unknown>) => entry.kind === "automatic_context_failure")).toBe(true);
+    } finally {
+      restoreEnv(snapshot);
+    }
+  });
 });
 
 describe("OMP safe tool execute runtime smoke", () => {
