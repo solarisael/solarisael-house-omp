@@ -143,7 +143,7 @@ function isOutcomeUnknownError(error: unknown): boolean {
 
 async function reconcileRustMemory(room: string, sourcePath: string, signal?: AbortSignal) {
   try {
-    const recalled = await recallWithRouting("", room, sourcePath, { signal });
+    const recalled = await recallWithRouting("", room, sourcePath, { signal, temporalDecay: false });
     if (!recalled.ok) return { reconciled: false, committed: null };
     const result = recalled.result as Record<string, unknown>;
     const collections = ["retrievalCandidates", "semanticChunks", "contentChunks", "dateMatches"];
@@ -434,7 +434,7 @@ export function registerSolarisaelTools(pi) {
       const { room, effectiveRoomDir } = roomContext(ctx.cwd);
   
       try {
-        const recalled = await recallWithRouting(effectiveRoomDir, room, params.query, { signal: _signal });
+        const recalled = await recallWithRouting(effectiveRoomDir, room, params.query, { signal: _signal, temporalDecay: false });
         if (!recalled.ok) {
           return {
             isError: true,

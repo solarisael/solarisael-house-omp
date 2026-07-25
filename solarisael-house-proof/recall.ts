@@ -599,11 +599,17 @@ function stripInvalidClusterTelemetry(result) {
   return safe;
 }
 
-export async function recallWithRouting(effectiveRoomDir, room, query, { signal } = {}) {
+function temporalDecayUnsupported(error) {
+  return error instanceof RustTransportError
+    && error.code === "invalid_params"
+    && error.message.includes("temporal_decay");
+}
+
+export async function recallWithRouting(effectiveRoomDir, room, query, { signal, temporalDecay = false } = {}) {
   const executable = discoverRustExecutable();
   const transport = rustRecallTransport();
   if (!transport) return recallWithFallback(effectiveRoomDir, room, query);
-  const params = {
+  const baseParams = {
     room,
     query,
     semantic_top_k: 8,
@@ -611,8 +617,16 @@ export async function recallWithRouting(effectiveRoomDir, room, query, { signal 
     content_top_k: 8,
     content_min_similarity: 0.30,
   };
+  const params = temporalDecay ? { ...baseParams, temporal_decay: true } : baseParams;
+  const requestOptions = { signal, timeoutMs: RECALL_TIMEOUT_MS };
   try {
-    const result = await transport.request("recall", params, { signal, timeoutMs: RECALL_TIMEOUT_MS });
+    let result;
+    try {
+      result = await transport.request("recall", params, requestOptions);
+    } catch (error) {
+      if (!temporalDecay || !temporalDecayUnsupported(error)) throw error;
+      result = await transport.request("recall", baseParams, requestOptions);
+    }
     const validationError = validRustRecallResult(result, query);
     if (validationError) {
       evictRustRecallTransport(executable, transport);

@@ -393,6 +393,41 @@ describe("OMP context hook runtime smoke", () => {
     });
   });
 
+  test("manual recall tool disables temporal decay", async () => {
+    const { cwd } = await makeTempMarkedRoom();
+    const snapshot = snapshotEnv();
+    const originalRequest = RustJsonlTransport.prototype.request;
+    try {
+      process.env.SOLARISAEL_HOUSE_RUST = process.execPath;
+      closeRustRecallTransports();
+      RustJsonlTransport.prototype.request = async function (method, params: any) {
+        expect(method).toBe("recall");
+        expect(params).not.toHaveProperty("temporal_decay");
+        return {
+          ok: true,
+          query: params.query,
+          found: false,
+          source: "rust-postgres",
+          retrievalCandidates: [],
+          canonMatches: [],
+          semanticChunks: [],
+          contentChunks: [],
+          dateMatches: [],
+          queryDates: [],
+          taxonomy: { memoryTypes: [], threadKeys: [], namedEntities: [] },
+        };
+      };
+
+      const { tools } = registerAdapter();
+      const response = await executeTool(tools, "recall", { query: "manual recall" }, { cwd });
+      expect(response.isError).not.toBe(true);
+    } finally {
+      RustJsonlTransport.prototype.request = originalRequest;
+      closeRustRecallTransports();
+      restoreEnv(snapshot);
+    }
+  });
+
   test("retains semantic-lane warnings in automatic recall context and diagnostics", async () => {
     const { cwd } = await makeTempRoom("automatic-context-warning");
     await writeJson(path.join(cwd, ".solarisael-room.json"), {
@@ -407,6 +442,7 @@ describe("OMP context hook runtime smoke", () => {
       closeRustRecallTransports();
       RustJsonlTransport.prototype.request = async function (method, params: any) {
         expect(method).toBe("recall");
+        expect(params.temporal_decay).toBe(true);
         return {
           ok: true,
           query: params.query,

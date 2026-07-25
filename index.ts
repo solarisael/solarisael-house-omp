@@ -344,7 +344,7 @@ export default function solarisaelHouseProof(pi) {
           recognizedEntities: resolution.matches.map((match) => match.canonicalName),
         });
         if (queryRoute.shouldAutoRecall) {
-          const recalled = await recallWithRouting(effectiveRoomDir, room, queryRoute.recallQuery || prompt);
+          const recalled = await recallWithRouting(effectiveRoomDir, room, queryRoute.recallQuery || prompt, { temporalDecay: true });
           if (recalled.ok) {
             const compact = compactRecall(recalled.result);
             const viewportKey = `${ctx?.sessionID || ctx?.sessionId || "session"}:${room}`;

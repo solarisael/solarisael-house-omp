@@ -50,6 +50,44 @@ describe("Rust recall routing", () => {
       },
       options: { timeoutMs: 120000 },
     });
+    expect((observed as any).params).not.toHaveProperty("temporal_decay");
+  });
+
+  test("forwards an explicit temporal decay opt-in", async () => {
+    let observed: any;
+    RustJsonlTransport.prototype.request = async function (method, params) {
+      observed = { method, params };
+      return result("alpha");
+    };
+
+    await expect(
+      recallWithRouting("room-dir", "example", "alpha", { temporalDecay: true }),
+    ).resolves.toEqual({ ok: true, result: result("alpha") });
+    expect(observed).toMatchObject({
+      method: "recall",
+      params: { temporal_decay: true },
+    });
+  });
+
+  test("retries automatic recall without temporal decay against the previous API-1 parser", async () => {
+    const observed: any[] = [];
+    RustJsonlTransport.prototype.request = async function (_method, params) {
+      observed.push(params);
+      if (observed.length === 1) {
+        throw new RustTransportError({
+          code: "invalid_params",
+          message: "unknown field `temporal_decay`",
+          retryable: false,
+        });
+      }
+      return result("alpha");
+    };
+
+    await expect(
+      recallWithRouting("room-dir", "example", "alpha", { temporalDecay: true }),
+    ).resolves.toEqual({ ok: true, result: result("alpha") });
+    expect(observed[0].temporal_decay).toBe(true);
+    expect(observed[1]).not.toHaveProperty("temporal_decay");
   });
 
   test("passes caller cancellation alongside the bounded timeout", async () => {
