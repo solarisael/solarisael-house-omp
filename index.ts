@@ -6,6 +6,7 @@ export const ADAPTER_API_VERSION = 1;
 // shaped modules under ./solarisael-house-proof/ so this door only wires hooks.
 
 import { isFreshConversation, logUnseenConversationTurns } from "./solarisael-house-proof/conversation-log.ts";
+import { closeGigaTransports, ingestGigaLoggedTurnsDetached } from "./giga.ts";
 import { closeRustRecallTransports, compactRecall, recallWithRouting } from "./solarisael-house-proof/recall.ts";
 import { closeRustRememberTransports } from "./solarisael-house-proof/tools.ts";
 import { closeRustAnamnesisTransports } from "./solarisael-house-proof/anamnesis.ts";
@@ -189,7 +190,8 @@ export default function solarisaelHouseProof(pi) {
 
     if (process.env.SOLARISAEL_REPLAY_MODE !== "1") {
       try {
-        await logUnseenConversationTurns(ctx, messages, "context");
+        const result = await logUnseenConversationTurns(ctx, messages, "context");
+        ingestGigaLoggedTurnsDetached(ctx, result.loggedTurns);
       } catch {
         // Live context and ledger writes are useful, but must never block context injection.
       }
@@ -368,7 +370,7 @@ export default function solarisaelHouseProof(pi) {
                 || compact.dateMatches?.length
               ),
             };
-            if (automaticCompact.found) {
+            if (automaticCompact.found || automaticCompact.warnings.length) {
               additions.push({
                 role: "custom",
                 customType: "solarisael-recall-context",
@@ -379,7 +381,13 @@ export default function solarisaelHouseProof(pi) {
                   "</system-reminder>",
                 ].join("\n"),
                 display: false,
-                details: { query: automaticCompact.query, found: automaticCompact.found, queryRoute, viewport: viewport.diagnostics },
+                details: {
+                  query: automaticCompact.query,
+                  found: automaticCompact.found,
+                  warnings: automaticCompact.warnings,
+                  queryRoute,
+                  viewport: viewport.diagnostics,
+                },
                 attribution: "agent",
                 timestamp,
               });
@@ -461,16 +469,18 @@ export default function solarisaelHouseProof(pi) {
     return { messages: [...messages, ...additions] };
   });
 
-  pi.on("shutdown", () => {
+  pi.on("shutdown", async () => {
     closeRustRecallTransports();
     closeRustRememberTransports();
     closeRustAnamnesisTransports();
+    await closeGigaTransports();
   });
 
   pi.on("agent_end", async (event, ctx) => {
     if (process.env.SOLARISAEL_REPLAY_MODE === "1") return;
     try {
-      await logUnseenConversationTurns(ctx, event?.messages || [], "agent_end");
+      const result = await logUnseenConversationTurns(ctx, event?.messages || [], "agent_end");
+      ingestGigaLoggedTurnsDetached(ctx, result.loggedTurns);
     } catch {
       // Logging must never perturb the visible OMP turn.
     }

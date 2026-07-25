@@ -45,6 +45,8 @@ const zod = {
   enum: (_values: string[]) => schema(),
   array: (_element: Schema) => schema(),
   object: (_shape: Record<string, Schema>) => schema(),
+  literal: (_value: string | boolean) => schema(),
+  discriminatedUnion: (_key: string, _variants: Schema[]) => schema(),
 };
 
 const substrateEnv = "SOLARISAEL_SUBSTRATE";

@@ -284,12 +284,20 @@ export function compactRecall(result, { includeTaxonomy = false } = {}) {
     query: result?.query,
     found: Boolean(result?.found),
     source: result?.source,
+    // Substrate self-diagnostics (recall.rs RecallResult.warnings) carry the
+    // reason a lane went absent, e.g. "semantic lane absent: embedding
+    // disabled". Dropping them turns a one-call diagnosis into a silent empty
+    // array. Fail-open: omitted entirely when the substrate reports nothing.
+    ...(Array.isArray(result?.warnings) && result.warnings.length
+      ? { warnings: result.warnings.slice(0, 8).map((w) => String(w).slice(0, 300)) }
+      : {}),
     canonMatches,
     retrievalCandidates,
     semanticChunks,
     contentChunks,
     dateMatches,
     queryDates: Array.isArray(result?.queryDates) ? result.queryDates : [],
+    warnings: Array.isArray(result?.warnings) ? result.warnings : [],
     ...(taxonomy ? { taxonomy } : {}),
     ...(clusterNudge ? { clusterNudge } : {}),
     ...(resonance ? { clusterResonance: resonance } : {}),
@@ -561,6 +569,9 @@ function validRustRecallResult(value, query) {
   }
   for (const field of ["retrievalCandidates", "canonMatches", "semanticChunks", "contentChunks", "dateMatches", "queryDates"]) {
     if (!Array.isArray(result[field])) return `result.${field} must be an array`;
+  }
+  if (result.warnings !== undefined && !stringArray(result.warnings)) {
+    return "result.warnings must be an array of strings";
   }
   if (result.dateMatches.length > 5) return "result.dateMatches must contain at most 5 entries";
   if (!result.taxonomy || typeof result.taxonomy !== "object" || Array.isArray(result.taxonomy)) {

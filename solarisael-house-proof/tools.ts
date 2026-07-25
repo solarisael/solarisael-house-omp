@@ -36,9 +36,38 @@ import {
   normalizeToolResponse,
   toolThrown,
 } from "./feedback.ts";
+import {
+  GIGA_OMP_ROOM_BINDING,
+  gigaTransportFailure,
+  requestGigaCandidateList,
+  requestGigaHealth,
+  requestGigaPromote,
+  requestGigaReview,
+  resolveGigaSourceRefsFromLedger,
+  type GigaCandidate,
+  type GigaPromotionTarget,
+  type GigaPromotionRequest,
+  type GigaSafeReviewState,
+} from "../giga.ts";
 
 const rustRememberTransports = new Map<string, RustJsonlTransport>();
 const LANE_STATUS_HEALTH_TIMEOUT_MS = 3_000;
+
+const defaultGigaPromotionOperations = Object.freeze({
+  requestGigaCandidateList,
+  resolveGigaSourceRefsFromLedger,
+  requestGigaPromote,
+});
+let gigaPromotionOperations = { ...defaultGigaPromotionOperations };
+
+export const __gigaPromotionTest = Object.freeze({
+  setOperations(overrides: Partial<typeof defaultGigaPromotionOperations>) {
+    gigaPromotionOperations = { ...defaultGigaPromotionOperations, ...overrides };
+  },
+  resetOperations() {
+    gigaPromotionOperations = { ...defaultGigaPromotionOperations };
+  },
+});
 
 
 function rustRememberTransport(): RustJsonlTransport | null {
@@ -305,6 +334,67 @@ function refuseToolResult(error) {
     content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     details: result,
   };
+}
+
+function gigaToolFailure(error) {
+  const failure = gigaTransportFailure(error);
+  const result = {
+    ok: false,
+    status: "error",
+    code: failure.code,
+    error: failure.message,
+    message: failure.message,
+    retryable: failure.retryable,
+    details: failure.details ?? {},
+  };
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    details: result,
+  };
+}
+
+function gigaCandidateRefusal(error, room, candidateId) {
+  const result = {
+    ok: false,
+    status: "error",
+    code: "giga_review_refused",
+    error,
+    message: error,
+    retryable: false,
+    details: { room, candidate_id: candidateId },
+  };
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    details: result,
+  };
+}
+
+function gigaPromotionRefusal(error, room, candidateId) {
+  const result = {
+    ok: false,
+    status: "error",
+    code: "giga_promotion_refused",
+    error,
+    message: error,
+    retryable: false,
+    details: { room, candidate_id: candidateId },
+  };
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    details: result,
+  };
+}
+
+function safeGigaTransition(previousState, newState) {
+  return (previousState === "unreviewed"
+      && (newState === "in_review" || newState === "dismissed" || newState === "expired"))
+    || (previousState === "in_review"
+      && (newState === "dismissed" || newState === "unresolved" || newState === "curio"))
+    || (previousState === "unresolved" && newState === "in_review")
+    || (previousState === "curio" && (newState === "dismissed" || newState === "expired"));
 }
 
 function registerHouseTool(pi, definition) {
@@ -864,6 +954,324 @@ export function registerSolarisaelTools(pi) {
       const rust = await writeRustAnamnesis({ room, payload, signal: _signal });
       const result = rust || await appendAnamnesisRep({ sharedRoot, room, payload });
       return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+    },
+  });
+
+  registerHouseTool(pi, {
+    name: "giga_candidate_list",
+    label: "GIGA Candidate List",
+    description: "List Stage 1 GIGA candidates stored for the current room. The room is derived from trusted OMP context and cannot be supplied by the caller.",
+    parameters: z.object({
+      review_state: z.enum(["unreviewed", "in_review", "dismissed", "unresolved", "curio", "expired"]).optional(),
+      limit: z.number().optional(),
+    }),
+    approval: "read",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const { room } = roomContext(ctx.cwd);
+      try {
+        const result = await requestGigaCandidateList(room, {
+          ...(params.review_state === undefined ? {} : { reviewState: params.review_state }),
+          ...(params.limit === undefined ? {} : { limit: params.limit }),
+          signal: _signal,
+        });
+        const crossRoom = result.candidates.find((candidate) => candidate.room !== room);
+        if (crossRoom) {
+          return gigaCandidateRefusal("candidate list contained a cross-room record", room, crossRoom.candidate_id);
+        }
+        const output = { ok: true, room, candidates: result.candidates };
+        return {
+          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+          details: output,
+        };
+      } catch (error) {
+        return gigaToolFailure(error);
+      }
+    },
+  });
+
+  registerHouseTool(pi, {
+    name: "giga_health",
+    label: "GIGA Aggregate Health",
+    description: "Read aggregate GIGA queue, store, processing, failure, and candidate health. This does not start GIGA when the integration is disabled.",
+    parameters: z.object({}),
+    approval: "read",
+    async execute(_toolCallId, _params, _signal) {
+      try {
+        const result = await requestGigaHealth(null, { signal: _signal });
+        const healthy = result.enabled && result.store_healthy;
+        const output = { ok: healthy, ...result };
+        return {
+          isError: !healthy,
+          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+          details: output,
+        };
+      } catch (error) {
+        return gigaToolFailure(error);
+      }
+    },
+  });
+
+  registerHouseTool(pi, {
+    name: "giga_review",
+    label: "GIGA Candidate Review",
+    description: "Apply a non-authority Stage 1 review transition to a candidate in the current room. Room, reviewer, previous state, authorization, and exact sources are derived locally and cannot be supplied by the caller.",
+    parameters: z.object({
+      candidate_id: z.string(),
+      new_state: z.enum(["in_review", "dismissed", "unresolved", "curio", "expired"]),
+      reason: z.string(),
+    }),
+    approval: "write",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const { room, spirit } = roomContext(ctx.cwd);
+      const candidateId = params.candidate_id;
+      const reason = params.reason.trim();
+      if (candidateId !== candidateId.trim() || !reason) {
+        return gigaCandidateRefusal("candidate_id must be exact and reason must be non-empty", room, candidateId);
+      }
+
+      let candidate: GigaCandidate | undefined;
+      try {
+        const listed = await requestGigaCandidateList(room, { limit: 200, signal: _signal });
+        candidate = listed.candidates.find((item) => item.candidate_id === candidateId);
+      } catch (error) {
+        return gigaToolFailure(error);
+      }
+      if (!candidate) {
+        return gigaCandidateRefusal("candidate was not found in the current room", room, candidateId);
+      }
+      if (candidate.room !== room) {
+        return gigaCandidateRefusal("cross-room candidate review is forbidden", room, candidateId);
+      }
+      if (
+        candidate.review_state === "promoted"
+        || candidate.review_state === "merged"
+        || candidate.review_state === "corrected"
+        || candidate.review_state === "superseded"
+      ) {
+        return gigaCandidateRefusal("authority-state candidates cannot be changed through this tool", room, candidateId);
+      }
+      if (!safeGigaTransition(candidate.review_state, params.new_state)) {
+        return gigaCandidateRefusal(
+          `transition from ${candidate.review_state} to ${params.new_state} is not available through this tool`,
+          room,
+          candidateId,
+        );
+      }
+      if (!Array.isArray(candidate.source_refs) || candidate.source_refs.length === 0) {
+        return gigaCandidateRefusal("candidate does not retain exact source references", room, candidateId);
+      }
+
+      try {
+        const result = await requestGigaReview({
+          candidate_id: candidate.candidate_id,
+          reviewer_id: spirit,
+          previous_state: candidate.review_state,
+          new_state: params.new_state as GigaSafeReviewState,
+          reason,
+          authorization_basis: GIGA_OMP_ROOM_BINDING,
+          source_refs: candidate.source_refs,
+          promotion_target: null,
+          merge_target: null,
+          merge_source_candidates: [],
+          resonance: null,
+          reviewed_at: new Date().toISOString(),
+        }, { signal: _signal });
+        const output = { ok: true, room, ...result };
+        return {
+          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+          details: output,
+        };
+      } catch (error) {
+        return gigaToolFailure(error);
+      }
+    },
+  });
+
+  async function executeGigaPromotion(
+    expectedKind: "memory" | "coding_lesson" | "project_lesson",
+    params: any,
+    signal: AbortSignal | undefined,
+    ctx: any,
+  ) {
+    const { room, spirit, operator } = roomContext(ctx.cwd);
+    const candidateId = params.candidate_id;
+    if (candidateId !== candidateId.trim() || !candidateId) {
+      return gigaPromotionRefusal("candidate_id must be exact and non-empty", room, candidateId);
+    }
+    if (!params.title.trim() || !params.body.trim()) {
+      return gigaPromotionRefusal("explicit edited title and body must be non-empty", room, candidateId);
+    }
+    let candidate: GigaCandidate | undefined;
+    try {
+      const listed = await gigaPromotionOperations.requestGigaCandidateList(room, {
+        reviewState: "in_review",
+        limit: 200,
+        signal,
+      });
+      candidate = listed.candidates.find((item) => item.candidate_id === candidateId);
+    } catch (error) {
+      return gigaToolFailure(error);
+    }
+    if (!candidate) {
+      return gigaPromotionRefusal("candidate was not found in review in the current room", room, candidateId);
+    }
+    if (candidate.kind !== expectedKind) {
+      return gigaPromotionRefusal("promotion tool kind must match the stored candidate kind", room, candidateId);
+    }
+    if (candidate.room !== room || candidate.review_state !== "in_review") {
+      return gigaPromotionRefusal("candidate is not an in-review current-room record", room, candidateId);
+    }
+    if (
+      typeof candidate.session_id !== "string"
+      || !candidate.session_id.trim()
+      || !Array.isArray(candidate.project_keys)
+      || candidate.project_keys.length > 1
+      || !Array.isArray(candidate.source_refs)
+      || candidate.source_refs.length === 0
+    ) {
+      return gigaPromotionRefusal("candidate does not retain valid runtime scope and source identity", room, candidateId);
+    }
+    const candidateProject = candidate.project_keys[0] ?? null;
+    const candidateScope = candidate.scope;
+    if (
+      !candidateScope
+      || typeof candidateScope !== "object"
+      || Array.isArray(candidateScope)
+      || Object.keys(candidateScope).sort().join(",") !== "project,publication_review_required,room,visibility"
+      || candidateScope.room !== room
+      || candidateScope.project !== candidateProject
+      || candidateScope.visibility !== "private"
+      || candidateScope.publication_review_required !== true
+    ) {
+      return gigaPromotionRefusal("candidate scope does not match trusted room and project authority", room, candidateId);
+    }
+
+    let target: GigaPromotionTarget;
+    if (expectedKind === "memory") {
+      target = {
+        kind: "memory",
+        payload: { title: params.title, body: params.body, threads: params.threads ?? [] },
+      };
+    } else if (expectedKind === "coding_lesson") {
+      if (candidate.project_keys.length !== 0) {
+        return gigaPromotionRefusal("coding lesson promotion cannot widen project scope", room, candidateId);
+      }
+      target = {
+        kind: "coding_lesson",
+        payload: {
+          title: params.title,
+          body: params.body,
+          shape: params.shape ?? null,
+          proof_pattern: params.proof_pattern ?? null,
+          trigger_context: params.trigger_context ?? null,
+          tags: params.tags ?? [],
+        },
+      };
+    } else {
+      const project = candidate.project_keys[0];
+      if (
+        candidate.project_keys.length !== 1
+        || typeof project !== "string"
+        || !project.trim()
+        || params.publication_approved !== true
+      ) {
+        return gigaPromotionRefusal("project lesson promotion requires one stored project key and explicit publication approval", room, candidateId);
+      }
+      target = {
+        kind: "project_lesson",
+        payload: {
+          title: params.title,
+          body: params.body,
+          project,
+          proof_pattern: params.proof_pattern ?? null,
+          trigger_context: params.trigger_context ?? null,
+          tags: params.tags ?? [],
+        },
+      };
+    }
+
+    try {
+      const sourceRefs = await gigaPromotionOperations.resolveGigaSourceRefsFromLedger(
+        ctx,
+        room,
+        candidate.session_id,
+        candidate.source_refs,
+        candidate.project_keys,
+      );
+      const authority = {
+        candidate_id: candidate.candidate_id,
+        room,
+        reviewer_id: spirit,
+        operator_identity: operator,
+        authorization_basis: GIGA_OMP_ROOM_BINDING,
+        source_refs: sourceRefs,
+        reviewed_at: new Date().toISOString(),
+      };
+      const promotionRequest: GigaPromotionRequest = target.kind === "project_lesson"
+        ? { ...authority, target, publication_consent: { operator_approved: true, reviewer_approved: true } }
+        : { ...authority, target, publication_consent: null };
+      const result = await gigaPromotionOperations.requestGigaPromote(promotionRequest, { signal });
+      const output = { ok: true, ...result };
+      return {
+        content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+        details: output,
+      };
+    } catch (error) {
+      return gigaToolFailure(error);
+    }
+  }
+
+  registerHouseTool(pi, {
+    name: "giga_promote_memory",
+    label: "GIGA Promote Memory",
+    description: "Promote one in-review current-room memory candidate with trusted authority and exact sources.",
+    parameters: z.object({
+      candidate_id: z.string(),
+      title: z.string(),
+      body: z.string(),
+      threads: z.array(z.string()).optional(),
+    }),
+    approval: "write",
+    execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      return executeGigaPromotion("memory", params, signal, ctx);
+    },
+  });
+
+  registerHouseTool(pi, {
+    name: "giga_promote_coding_lesson",
+    label: "GIGA Promote Coding Lesson",
+    description: "Promote one in-review global coding lesson candidate with trusted authority and exact sources.",
+    parameters: z.object({
+      candidate_id: z.string(),
+      title: z.string(),
+      body: z.string(),
+      shape: z.string().optional(),
+      proof_pattern: z.string().optional(),
+      trigger_context: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+    }),
+    approval: "write",
+    execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      return executeGigaPromotion("coding_lesson", params, signal, ctx);
+    },
+  });
+
+  registerHouseTool(pi, {
+    name: "giga_promote_project_lesson",
+    label: "GIGA Promote Project Lesson",
+    description: "Promote one in-review project lesson candidate with trusted project scope and explicit publication approval.",
+    parameters: z.object({
+      candidate_id: z.string(),
+      title: z.string(),
+      body: z.string(),
+      proof_pattern: z.string().optional(),
+      trigger_context: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+      publication_approved: z.boolean(),
+    }),
+    approval: "write",
+    execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      return executeGigaPromotion("project_lesson", params, signal, ctx);
     },
   });
 }

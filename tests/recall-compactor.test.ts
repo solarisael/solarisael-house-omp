@@ -85,6 +85,29 @@ describe("recall compactor", () => {
     expect(compact.contentChunks).toEqual([]);
   });
 
+  test("preserves recall warnings while suppressing raw chunks and defaults omitted warnings", () => {
+    const warnings = ["semantic retrieval disabled: embedding model unavailable"];
+    const compact = compactRecall({
+      ok: true,
+      found: true,
+      query: "warning retention",
+      source: "memory",
+      warnings,
+      retrievalCandidates: [{
+        source_path: "memory/fused.md",
+        title: "Fused result",
+        excerpt: "Fused context.",
+      }],
+      semanticChunks: [{ body: "suppressed semantic chunk" }],
+      contentChunks: [{ body: "suppressed content chunk" }],
+    });
+
+    expect(compact.warnings).toBe(warnings);
+    expect(compact.semanticChunks).toEqual([]);
+    expect(compact.contentChunks).toEqual([]);
+    expect(compactRecall({ ok: true }).warnings).toEqual([]);
+  });
+
   test("filters reverse-canon matches unless directly named or tied to a surfaced candidate path", () => {
     const compact = compactRecall({
       ok: true,

@@ -30,7 +30,7 @@ describe("Rust recall routing", () => {
     else process.env.SOLARISAEL_HOUSE_RUST = originalRust;
   });
 
-  test("sends protocol recall params and accepts an authoritative result", async () => {
+  test("sends protocol recall params and accepts an authoritative result that omits warnings", async () => {
     let observed: unknown;
     RustJsonlTransport.prototype.request = async function (method, params, options) {
       observed = { method, params, options };
@@ -102,6 +102,18 @@ describe("Rust recall routing", () => {
       },
     });
     expect(JSON.stringify(routed.result.details)).not.toContain("do-not-leak");
+  });
+
+  test("rejects warnings unless every entry is a string", async () => {
+    RustJsonlTransport.prototype.request = async function () {
+      return {
+        ...result("alpha"),
+        warnings: ["semantic retrieval disabled", { code: "embedding_unavailable" }],
+      };
+    };
+    const routed = await recallWithRouting("room-dir", "example", "alpha");
+    expect(routed.ok).toBe(false);
+    expect(routed.result.error).toContain("result.warnings must be an array of strings");
   });
 
   test("rejects missing taxonomy", async () => {

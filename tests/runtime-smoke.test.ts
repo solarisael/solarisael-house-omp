@@ -6,6 +6,8 @@ import path from "node:path";
 import solarisaelHouseProof from "../index.ts";
 import { roomContext, statePathForRoom } from "../solarisael-house-proof/room.ts";
 import { recallTelemetryPath } from "../solarisael-house-proof/recall-telemetry.ts";
+import { closeRustRecallTransports } from "../solarisael-house-proof/recall.ts";
+import { RustJsonlTransport } from "../rust-transport.ts";
 
 type CapturedTool = {
   name: string;
@@ -389,6 +391,60 @@ describe("OMP context hook runtime smoke", () => {
       expect(additions.find((message) => message.customType === "solarisael-routing-mode")?.details)
         .toEqual({ enabled: true });
     });
+  });
+
+  test("retains semantic-lane warnings in automatic recall context and diagnostics", async () => {
+    const { cwd } = await makeTempRoom("automatic-context-warning");
+    await writeJson(path.join(cwd, ".solarisael-room.json"), {
+      version: 1,
+      room: "automatic-context-warning",
+    });
+    const snapshot = snapshotEnv();
+    const originalRequest = RustJsonlTransport.prototype.request;
+    const warning = "semantic retrieval disabled: embedding model unavailable";
+    try {
+      process.env.SOLARISAEL_HOUSE_RUST = process.execPath;
+      closeRustRecallTransports();
+      RustJsonlTransport.prototype.request = async function (method, params: any) {
+        expect(method).toBe("recall");
+        return {
+          ok: true,
+          query: params.query,
+          found: true,
+          source: "rust-postgres",
+          warnings: [warning],
+          retrievalCandidates: [],
+          canonMatches: [],
+          semanticChunks: [{ source_path: "memory/raw-semantic.md", body: "raw semantic context" }],
+          contentChunks: [{ source_path: "memory/raw-content.md", body: "raw content context" }],
+          dateMatches: [],
+          queryDates: [],
+          taxonomy: { memoryTypes: [], threadKeys: [], namedEntities: [] },
+        };
+      };
+
+      const { hooks } = registerAdapter();
+      const contextHook = hooks.find((hook) => hook.name === "context")?.handler;
+      if (!contextHook) throw new Error("Context hook was not registered");
+      const messages = [{
+        role: "user",
+        id: "automatic-context-warning",
+        content: "Recall the embedding-disabled warning.",
+      }];
+      const result = await contextHook({ messages }, { cwd, sessionID: "automatic-context-warning" });
+      const additions = (result?.messages.slice(messages.length) || []) as Array<Record<string, any>>;
+      const recallContext = additions.find((message) => message.customType === "solarisael-recall-context");
+
+      expect(recallContext?.content).toContain(`"warnings": [\n    "${warning}"\n  ]`);
+      expect(recallContext?.content).toContain('"semanticChunks": []');
+      expect(recallContext?.content).toContain('"contentChunks": []');
+      expect(recallContext?.details.warnings).toEqual([warning]);
+      expect(recallContext?.details.found).toBe(false);
+    } finally {
+      RustJsonlTransport.prototype.request = originalRequest;
+      closeRustRecallTransports();
+      restoreEnv(snapshot);
+    }
   });
 
   test("fails open while retaining redacted automatic recall diagnostics", async () => {

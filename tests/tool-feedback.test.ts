@@ -32,6 +32,8 @@ const zod = {
   enum: (_values: string[]) => schema(),
   array: (_element: Schema) => schema(),
   object: (_shape: Record<string, Schema>) => schema(),
+  literal: (_value: string | boolean) => schema(),
+  discriminatedUnion: (_key: string, _variants: Schema[]) => schema(),
 };
 
 const HOUSE_TOOL_NAMES = [
@@ -50,6 +52,12 @@ const HOUSE_TOOL_NAMES = [
   "house_model_default",
   "anamnesis",
   "anamnesis_write",
+  "giga_candidate_list",
+  "giga_health",
+  "giga_review",
+  "giga_promote_memory",
+  "giga_promote_coding_lesson",
+  "giga_promote_project_lesson",
 ];
 
 function registerTools(): CapturedTool[] {
@@ -178,7 +186,7 @@ describe("House tool feedback", () => {
       details: { execution: { write_outcome: "not_started" } },
     });
 
-    for (const operation of ["remember", "delete_lesson", "update_lesson", "set_room_state", "sleep", "house_routing_mode", "house_model_default", "anamnesis_write"]) {
+    for (const operation of ["remember", "delete_lesson", "update_lesson", "set_room_state", "sleep", "house_routing_mode", "house_model_default", "anamnesis_write", "giga_promote_memory", "giga_promote_coding_lesson", "giga_promote_project_lesson"]) {
       const result = normalizeToolResponse({
         isError: true,
         content: [{

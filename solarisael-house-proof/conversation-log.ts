@@ -2,11 +2,19 @@
 // Silhouette: take visible user/assistant turns and write the room ledger + markdown log.
 
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { OMP_SESSION_ID, TRANSCRIPT_DEBUG_LOG } from "./constants.ts";
 import { loadHouseLedger } from "./core.ts";
 import { roomContext } from "./room.ts";
 import { conversationText, localDateStamp, smallHash } from "./text.ts";
+
+function visibleSourceTimestamp(message) {
+  const value = message?.timestamp ?? message?.createdAt ?? message?.info?.timestamp ?? message?.info?.createdAt;
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
 
 export function conversationTurns(messages) {
   return (Array.isArray(messages) ? messages : [])
@@ -15,9 +23,11 @@ export function conversationTurns(messages) {
       if (role !== "user" && role !== "assistant") return null;
       const text = conversationText(message).trim();
       if (!text) return null;
-      const rawID = message?.id || message?.messageID || message?.info?.id || message?.timestamp;
-      const messageID = rawID || index;
-      return { role, text, index, messageID, hasStableID: Boolean(rawID) };
+      const visibleID = message?.id ?? message?.messageID ?? message?.info?.id;
+      const messageID = visibleID ?? index;
+      const hasStableID = visibleID !== undefined && visibleID !== null && visibleID !== "";
+      const sourceTimestamp = visibleSourceTimestamp(message);
+      return { role, text, index, messageID, hasStableID, sourceTimestamp };
     })
     .filter(Boolean);
 }
@@ -83,8 +93,8 @@ async function logRoomTurn(ctx, role, text, messageID) {
   const { room, spirit, operator, effectiveRoomDir, sharedRoot } = roomContext(ctx?.cwd || process.cwd());
   const ledger = await loadHouseLedger();
   const meta = {
-    sessionID: OMP_SESSION_ID,
-    messageID: messageID || `${role}-${Date.now()}`,
+    sessionID: ctx?.sessionID || ctx?.sessionId || OMP_SESSION_ID,
+    messageID: messageID ?? `${role}-${Date.now()}`,
     agentName: spirit,
     spirit,
     operator,
@@ -98,9 +108,11 @@ const loggedTurnKeys = new Set();
 
 export async function logUnseenConversationTurns(ctx, messages, source = "unknown") {
   const turns = conversationTurns(messages);
+  const sessionID = ctx?.sessionID || ctx?.sessionId || OMP_SESSION_ID;
   let appended = 0;
   let skipped = 0;
   const errors = [];
+  const loggedTurns = [];
   for (const turn of turns) {
     const key = conversationTurnKey(ctx, turn);
     if (loggedTurnKeys.has(key)) {
@@ -109,20 +121,25 @@ export async function logUnseenConversationTurns(ctx, messages, source = "unknow
     }
 
     let wroteAnything = false;
+    let transcriptDurable = false;
     let shouldWriteLedger = true;
     try {
       const result = await appendRoomTranscriptTurn(ctx, turn);
       if (result.appended) appended += 1;
       else skipped += 1;
       shouldWriteLedger = result.appended;
+      transcriptDurable = true;
       wroteAnything = true;
     } catch (err) {
       errors.push({ key, surface: "transcript", error: err?.message || String(err) });
     }
 
+    let ledgerDurable = false;
     if (shouldWriteLedger) {
       try {
-        await logRoomTurn(ctx, turn.role, turn.text, key);
+        const ledgerMessageID = turn.hasStableID ? turn.messageID : key;
+        await logRoomTurn(ctx, turn.role, turn.text, ledgerMessageID);
+        ledgerDurable = true;
         wroteAnything = true;
       } catch (err) {
         errors.push({ key, surface: "ledger", error: err?.message || String(err) });
@@ -130,6 +147,17 @@ export async function logUnseenConversationTurns(ctx, messages, source = "unknow
     }
 
     if (wroteAnything) loggedTurnKeys.add(key);
+    if (transcriptDurable && ledgerDurable && turn.hasStableID) {
+      loggedTurns.push({
+        role: turn.role,
+        text: turn.text,
+        sourceID: String(turn.messageID),
+        contentHash: createHash("sha256").update(turn.text, "utf8").digest("hex"),
+        sessionID,
+        sourceTimestamp: turn.sourceTimestamp,
+        hasStableID: true,
+      });
+    }
   }
 
   try {
@@ -143,4 +171,5 @@ export async function logUnseenConversationTurns(ctx, messages, source = "unknow
   } catch {
     // Debug logging must never block transcript capture.
   }
+  return { appended, skipped, errors, loggedTurns };
 }

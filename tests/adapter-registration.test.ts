@@ -9,11 +9,12 @@ type CapturedTool = {
 };
 
 type Schema = {
-  kind: "string" | "boolean" | "number" | "enum" | "object" | "array";
+  kind: "string" | "boolean" | "number" | "enum" | "literal" | "object" | "array" | "discriminatedUnion";
   isOptional?: boolean;
   values?: string[];
   shape?: Record<string, Schema>;
   element?: Schema;
+  variants?: Schema[];
   describe(description: string): Schema;
   optional(): Schema;
   default(value: unknown): Schema;
@@ -24,8 +25,10 @@ type SchemaSummary =
   | { type: "boolean"; optional?: true }
   | { type: "number"; optional?: true }
   | { type: "enum"; values: string[]; optional?: true }
+  | { type: "literal"; value: string | boolean; optional?: true }
   | { type: "array"; element: SchemaSummary; optional?: true }
-  | { type: "object"; fields: Record<string, SchemaSummary>; optional?: true };
+  | { type: "object"; fields: Record<string, SchemaSummary>; optional?: true }
+  | { type: "discriminatedUnion"; variants: SchemaSummary[]; optional?: true };
 
 function makeSchema(kind: Schema["kind"], fields: Partial<Schema> = {}): Schema {
   return {
@@ -54,6 +57,12 @@ const zodStub = {
   enum(values: string[]) {
     return makeSchema("enum", { values });
   },
+  literal(value: string | boolean) {
+    return makeSchema("literal", { values: [String(value)] });
+  },
+  discriminatedUnion(_key: string, variants: Schema[]) {
+    return makeSchema("discriminatedUnion", { variants });
+  },
   object(shape: Record<string, Schema>) {
     return makeSchema("object", { shape });
   },
@@ -77,9 +86,15 @@ function summarizeSchema(schema: Schema): SchemaSummary {
       return { type: "number", ...optional };
     case "enum":
       return { type: "enum", values: schema.values ?? [], ...optional };
+    case "literal": {
+      const value = schema.values?.[0] ?? "";
+      return { type: "literal", value: value === "true" ? true : value === "false" ? false : value, ...optional };
+    }
     case "array":
       if (!schema.element) throw new Error("array schema missing element");
       return { type: "array", element: summarizeSchema(schema.element), ...optional };
+    case "discriminatedUnion":
+      return { type: "discriminatedUnion", variants: (schema.variants ?? []).map(summarizeSchema), ...optional };
     case "object":
       return {
         type: "object",
@@ -128,6 +143,12 @@ const expectedToolNames = [
   "house_dispatch",
   "house_routing_mode",
   "house_model_default",
+  "giga_candidate_list",
+  "giga_health",
+  "giga_review",
+  "giga_promote_memory",
+  "giga_promote_coding_lesson",
+  "giga_promote_project_lesson",
 ];
 
 function toolMap(tools: CapturedTool[]) {
@@ -165,6 +186,9 @@ describe("OMP adapter registration", () => {
       house_dispatch: { approval: "read" },
       house_routing_mode: { approval: "write" },
       house_model_default: { approval: "write" },
+      giga_promote_memory: { approval: "write" },
+      giga_promote_coding_lesson: { approval: "write" },
+      giga_promote_project_lesson: { approval: "write" },
     });
   });
  
@@ -265,6 +289,62 @@ describe("OMP adapter registration", () => {
           howItWent: { type: "string", optional: true },
           portalPull: { type: "string", optional: true },
           lighter: { type: "string", optional: true },
+        },
+      },
+      giga_candidate_list: {
+        type: "object",
+        fields: {
+          review_state: {
+            type: "enum",
+            values: ["unreviewed", "in_review", "dismissed", "unresolved", "curio", "expired"],
+            optional: true,
+          },
+          limit: { type: "number", optional: true },
+        },
+      },
+      giga_health: { type: "object", fields: {} },
+      giga_review: {
+        type: "object",
+        fields: {
+          candidate_id: { type: "string" },
+          new_state: {
+            type: "enum",
+            values: ["in_review", "dismissed", "unresolved", "curio", "expired"],
+          },
+          reason: { type: "string" },
+        },
+      },
+      giga_promote_memory: {
+        type: "object",
+        fields: {
+          candidate_id: { type: "string" },
+          title: { type: "string" },
+          body: { type: "string" },
+          threads: { type: "array", element: { type: "string" }, optional: true },
+        },
+      },
+      giga_promote_coding_lesson: {
+        type: "object",
+        fields: {
+          candidate_id: { type: "string" },
+          title: { type: "string" },
+          body: { type: "string" },
+          shape: { type: "string", optional: true },
+          proof_pattern: { type: "string", optional: true },
+          trigger_context: { type: "string", optional: true },
+          tags: { type: "array", element: { type: "string" }, optional: true },
+        },
+      },
+      giga_promote_project_lesson: {
+        type: "object",
+        fields: {
+          candidate_id: { type: "string" },
+          title: { type: "string" },
+          body: { type: "string" },
+          proof_pattern: { type: "string", optional: true },
+          trigger_context: { type: "string", optional: true },
+          tags: { type: "array", element: { type: "string" }, optional: true },
+          publication_approved: { type: "boolean" },
         },
       },
       room_state: { type: "object", fields: {} },
