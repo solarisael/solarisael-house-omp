@@ -44,7 +44,7 @@ describe("Rust recall routing", () => {
         room: "example",
         query: "alpha",
         semantic_top_k: 8,
-        semantic_min_similarity: 0.5,
+        semantic_min_similarity: 0.4,
         content_top_k: 8,
         content_min_similarity: 0.3,
       },

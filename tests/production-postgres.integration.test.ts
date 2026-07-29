@@ -7,7 +7,7 @@ import solarisaelHouseProof from "../index.ts";
 import { roomContext } from "../solarisael-house-proof/room.ts";
 import { windowsPathToWsl } from "../solarisael-house-proof/substrate.ts";
 
-const enabled = process.env.SOLARISAEL_OMP_POSTGRES_TEST === "1";
+const enabled = process.env.SOLARISAEL_I_UNDERSTAND_THIS_IS_AN_ISOLATED_POSTGRES_TEST === "1";
 const execFile = promisify((command: string, args: string[], options: object, callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void) => {
   const child = spawn(command, args, { ...options, windowsHide: true });
   let stdout = "";
@@ -77,15 +77,13 @@ function text(result: any): string {
 }
 
 async function queryAndCleanup(room: string, records: Array<{ id: number; sourcePath: string; title: string }>) {
-  const substrate = process.env.SOLARISAEL_SUBSTRATE || `${process.env.USERPROFILE}/Solarisael/Obsidian/obsidian/house/solarisael-house-substrate-rust`;
+  const substrate = process.env.SOLARISAEL_SUBSTRATE;
+  const testDatabase = process.env.SOLARISAEL_SUBSTRATE_TEST_DATABASE_URL;
+  if (!substrate || !testDatabase) throw new Error("Isolated PostgreSQL test requires SOLARISAEL_SUBSTRATE and SOLARISAEL_SUBSTRATE_TEST_DATABASE_URL");
   const script = [
-    "import json, os, pathlib, psycopg",
-    "root=pathlib.Path(os.environ['SOLARISAEL_OMP_SUBSTRATE_DIR'])",
-    "env={}",
-    "p=root/'.env'",
-    "for line in p.read_text().splitlines() if p.exists() else []:\n k,v=(line.split('=',1)+[''])[:2] if '=' in line else ('','')\n env[k.strip()]=v.strip().strip(chr(34)).strip(chr(39))",
-    "url=os.environ.get('SOLARISAEL_SUBSTRATE_TEST_DATABASE_URL') or env.get('DATABASE_URL')",
-    "conn=psycopg.connect(url) if url else psycopg.connect(host=env['PGHOST'],port=int(env.get('PGPORT','5432')),user=env['PGUSER'],password=env['PGPASSWORD'],dbname=env['PGDATABASE'])",
+    "import json, os, psycopg",
+    "url=os.environ['SOLARISAEL_SUBSTRATE_TEST_DATABASE_URL']",
+    "conn=psycopg.connect(url)",
     "cur=conn.cursor()",
     "records=json.loads(os.environ['SOLARISAEL_OMP_RECORDS'])",
     "deleted=[]",
@@ -105,16 +103,18 @@ async function queryAndCleanup(room: string, records: Array<{ id: number; source
         "SOLARISAEL_OMP_SUBSTRATE_DIR",
         "SOLARISAEL_OMP_ROOM",
         "SOLARISAEL_OMP_RECORDS",
+        "SOLARISAEL_SUBSTRATE_TEST_DATABASE_URL",
       ].filter(Boolean).join(":"),
       SOLARISAEL_OMP_SUBSTRATE_DIR: windowsPathToWsl(substrate),
       SOLARISAEL_OMP_ROOM: room,
       SOLARISAEL_OMP_RECORDS: JSON.stringify(records),
+      SOLARISAEL_SUBSTRATE_TEST_DATABASE_URL: testDatabase,
     },
   });
   return JSON.parse(result.stdout.trim());
 }
 
-describe.skipIf(!enabled)("production PostgreSQL seam", () => {
+describe.skipIf(!enabled)("isolated PostgreSQL seam", () => {
   test("registered remember and recall survive a 75-second WSL idle boundary", async () => {
     const configuredRust = discoverRustExecutable();
     expect(configuredRust).toBeString();

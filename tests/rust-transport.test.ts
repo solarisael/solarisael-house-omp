@@ -114,12 +114,14 @@ describe("Rust JSONL transport", () => {
     client.close();
   }));
 
-  test("pre-aborted request with timeout does not leave a timer or child", async () => withFixture("success", async (file) => {
+  test("pre-aborted request with timeout does not spawn or poison the transport", async () => withFixture("success", async (file) => {
     const client = transport(file, "success");
     const controller = new AbortController();
     controller.abort();
+
     await expect(client.request("remember", {}, { signal: controller.signal, timeoutMs: 2_147_483_647 })).rejects.toThrow("cancelled");
-    await expect(client.request("remember", {})).rejects.toThrow("cancelled");
+    await expect(client.request("remember", { value: "still-works" })).resolves.toEqual({ echoed: "still-works" });
+    client.close();
   }));
 
   test("definitive requests ignore post-dispatch abort but honor pre-abort", async () => withFixture("delayed", async (file) => {
@@ -207,12 +209,14 @@ describe("Rust JSONL transport", () => {
     client.close();
   }));
 
-  test("cancellation and timeout make the owned transport unusable", async () => withFixture("success", async (file) => {
+  test("pre-dispatch cancellation stays usable while timeout poisons the transport", async () => withFixture("success", async (file) => {
     const client = transport(file, "success");
     const controller = new AbortController();
     controller.abort();
+
     await expect(client.request("remember", {}, { signal: controller.signal })).rejects.toThrow("cancelled");
-    await expect(client.request("remember", {})).rejects.toThrow("cancelled");
+    await expect(client.request("remember", { value: "still-works" })).resolves.toEqual({ echoed: "still-works" });
+    client.close();
 
     const timeoutClient = transport(file, "success");
     await expect(timeoutClient.request("remember", {}, { timeoutMs: 1 })).rejects.toThrow("timed out");

@@ -16,6 +16,17 @@ function visibleSourceTimestamp(message) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+// Stable source identity for GIGA, derived here because OMP supplies no message
+// id. Index is load-bearing: duplicate source ids null an entire event window,
+// and index is safe here only because OMP resends the whole append-only array.
+// Adapter-local strategy, NOT a House recipe — see project lesson 125
+// (the-athanor) for the three identity requirements and why this must not be
+// copied into an adapter that sees partial or scrolling history.
+function derivedSourceID(role, index, text) {
+  const digest = createHash("sha256").update(text, "utf8").digest("hex");
+  return `omp-derived:${role}:${index}:${digest.slice(0, 32)}`;
+}
+
 export function conversationTurns(messages) {
   return (Array.isArray(messages) ? messages : [])
     .map((message, index) => {
@@ -24,10 +35,16 @@ export function conversationTurns(messages) {
       const text = conversationText(message).trim();
       if (!text) return null;
       const visibleID = message?.id ?? message?.messageID ?? message?.info?.id;
-      const messageID = visibleID ?? index;
-      const hasStableID = visibleID !== undefined && visibleID !== null && visibleID !== "";
-      const sourceTimestamp = visibleSourceTimestamp(message);
-      return { role, text, index, messageID, hasStableID, sourceTimestamp };
+      const hasVisibleID = visibleID !== undefined && visibleID !== null && visibleID !== "";
+      const messageID = hasVisibleID ? visibleID : derivedSourceID(role, index, text);
+      // Always true: identity is derived when the harness omits one. Kept as an
+      // explicit field because giga.ts validates it as an exact-source contract.
+      const hasStableID = true;
+      // GIGA rejects any window whose turns fail isRfc3339, so a missing stamp is
+      // fatal. Fall back to capture time — an observation time, not a claimed
+      // source time. Never overwrites a real value. Lesson 125 (the-athanor).
+      const sourceTimestamp = visibleSourceTimestamp(message) ?? new Date().toISOString();
+      return { role, text, index, messageID, hasVisibleID, hasStableID, sourceTimestamp };
     })
     .filter(Boolean);
 }
@@ -38,7 +55,7 @@ export function isFreshConversation(messages) {
 
 function conversationTurnKey(ctx, turn) {
   const session = ctx?.sessionID || ctx?.sessionId || OMP_SESSION_ID;
-  const identity = turn.hasStableID ? `id:${turn.messageID}` : `text:${smallHash(turn.text)}`;
+  const identity = `id:${turn.messageID}`;
   return `${session}:${turn.role}:${identity}:${smallHash(turn.text)}`;
 }
 
@@ -137,8 +154,7 @@ export async function logUnseenConversationTurns(ctx, messages, source = "unknow
     let ledgerDurable = false;
     if (shouldWriteLedger) {
       try {
-        const ledgerMessageID = turn.hasStableID ? turn.messageID : key;
-        await logRoomTurn(ctx, turn.role, turn.text, ledgerMessageID);
+        await logRoomTurn(ctx, turn.role, turn.text, turn.messageID);
         ledgerDurable = true;
         wroteAnything = true;
       } catch (err) {
@@ -147,7 +163,7 @@ export async function logUnseenConversationTurns(ctx, messages, source = "unknow
     }
 
     if (wroteAnything) loggedTurnKeys.add(key);
-    if (transcriptDurable && ledgerDurable && turn.hasStableID) {
+    if (transcriptDurable && ledgerDurable) {
       loggedTurns.push({
         role: turn.role,
         text: turn.text,

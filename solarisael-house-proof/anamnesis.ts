@@ -4,7 +4,7 @@ import { discoverRustExecutable } from "../discovery.ts";
 const rustAnamnesisTransports = new Map<string, RustJsonlTransport>();
 const ANAMNESIS_DEFAULT_LIMIT = 10;
 const ANAMNESIS_MAX_LIMIT = 50;
-
+const ANAMNESIS_TIMEOUT_MS = 120_000;
 const ANAMNESIS_VALIDATOR_SYMBOL = "validRustAnamnesisResult";
 
 function observedShape(value: unknown): Record<string, unknown> {
@@ -230,7 +230,7 @@ export async function queryAnamnesis(effectiveRoomDir, room, options = {}) {
       limit,
     };
     try {
-      const result = await transport.request("anamnesis", params);
+      const result = await transport.request("anamnesis", params, { timeoutMs: ANAMNESIS_TIMEOUT_MS });
       const validationError = validRustAnamnesisResult(result, mode, room);
       if (validationError) {
         evictRustAnamnesisTransport(executable, transport);

@@ -24,6 +24,18 @@ function text(value) {
 
 const RECALL_VALIDATOR_SYMBOL = "validRustRecallResult";
 
+// Semantic floor for recall, calibrated to the embedding model in use.
+// Nemotron-3-Embed-1B at Q4 has a compressed cosine scale: measured
+// 2026-07-25 over 3981 chunks, correct rank-1 matches land at 0.42-0.56 and
+// unrelated queries top out at 0.24. The previous 0.50 discarded correct top
+// hits and returned a confident empty answer, which reads to the caller as a
+// true "no canonical match". Re-measure when the model or quantization
+// changes; this is calibration, not taste.
+const RECALL_SEMANTIC_MIN_SIM = 0.40;
+// word_similarity 0.30 is already "noticeable substring". Tightening it would
+// miss short proper-noun queries the caller asked for on purpose.
+const RECALL_CONTENT_MIN_SIM = 0.30;
+
 function observedShape(value) {
   if (value === null) return { type: "null" };
   if (Array.isArray(value)) return { type: "array", length: value.length };
@@ -176,12 +188,40 @@ function canonTouchesCandidate(match, candidatePaths) {
   return canonFiles(match).some((file) => candidatePaths.has(file));
 }
 
+function compactThreadNeighbors(value) {
+  return Array.isArray(value)
+    ? value.slice(0, 6).map((neighbor) => ({
+      thread: neighbor?.thread,
+      direction: neighbor?.direction,
+      id: neighbor?.id,
+      title: neighbor?.title,
+      source_path: neighbor?.source_path,
+      excerpt: text(neighbor?.excerpt).slice(0, 500),
+      authority_state: neighbor?.authority_state,
+      superseded_by: neighbor?.superseded_by,
+    }))
+    : [];
+}
+
+function compactThreadEvidence(value) {
+  const memoryId = value?.memory_id;
+  const threadKey = text(value?.thread_key).trim();
+  const neighbors = compactThreadNeighbors(value?.thread_neighbors);
+
+  return {
+    ...(memoryId !== undefined && memoryId !== null ? { memory_id: memoryId } : {}),
+    ...(threadKey ? { thread_key: threadKey } : {}),
+    ...(neighbors.length ? { thread_neighbors: neighbors } : {}),
+  };
+}
+
 function compactRetrievalCandidates(result) {
   return Array.isArray(result?.retrievalCandidates)
     ? result.retrievalCandidates.slice(0, 5).map((candidate) => ({
       source_path: candidate?.source_path,
       title: candidate?.title,
       heading_path: candidate?.heading_path,
+      ...compactThreadEvidence(candidate),
       sources: strings(candidate?.sources).slice(0, 4),
       score: candidate?.score,
       term_coverage: candidate?.term_coverage,
@@ -389,9 +429,9 @@ async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
     "--room", room,
     "--substrate-dir", substrateDirWsl,
     "--semantic-top-k", "1",
-    "--semantic-min-sim", "0.50",
+    "--semantic-min-sim", String(RECALL_SEMANTIC_MIN_SIM),
     "--content-top-k", "1",
-    "--content-min-sim", "0.30",
+    "--content-min-sim", String(RECALL_CONTENT_MIN_SIM),
   ];
   const probe = await runWslDiagnostic({ argv, stdin: query });
   return {
@@ -427,9 +467,9 @@ async function runDirectRecallFallback(effectiveRoomDir, room, query) {
     "--room", room,
     "--substrate-dir", substrateDirWsl,
     "--semantic-top-k", "8",
-    "--semantic-min-sim", "0.50",
+    "--semantic-min-sim", String(RECALL_SEMANTIC_MIN_SIM),
     "--content-top-k", "8",
-    "--content-min-sim", "0.30",
+    "--content-min-sim", String(RECALL_CONTENT_MIN_SIM),
   ];
   const probe = await runWslDiagnostic({ argv, stdin: query });
   if (probe.timedOut || probe.spawnError || probe.code !== 0) {
@@ -613,9 +653,9 @@ export async function recallWithRouting(effectiveRoomDir, room, query, { signal,
     room,
     query,
     semantic_top_k: 8,
-    semantic_min_similarity: 0.50,
+    semantic_min_similarity: RECALL_SEMANTIC_MIN_SIM,
     content_top_k: 8,
-    content_min_similarity: 0.30,
+    content_min_similarity: RECALL_CONTENT_MIN_SIM,
   };
   const params = temporalDecay ? { ...baseParams, temporal_decay: true } : baseParams;
   const requestOptions = { signal, timeoutMs: RECALL_TIMEOUT_MS };

@@ -11,17 +11,19 @@ type CapturedTool = {
 type Schema = {
   kind: "string" | "boolean" | "number" | "enum" | "literal" | "object" | "array" | "discriminatedUnion";
   isOptional?: boolean;
+  pattern?: string;
   values?: string[];
   shape?: Record<string, Schema>;
   element?: Schema;
   variants?: Schema[];
   describe(description: string): Schema;
+  regex(pattern: RegExp): Schema;
   optional(): Schema;
   default(value: unknown): Schema;
 };
 
 type SchemaSummary =
-  | { type: "string"; optional?: true }
+  | { type: "string"; optional?: true; pattern?: string }
   | { type: "boolean"; optional?: true }
   | { type: "number"; optional?: true }
   | { type: "enum"; values: string[]; optional?: true }
@@ -35,6 +37,10 @@ function makeSchema(kind: Schema["kind"], fields: Partial<Schema> = {}): Schema 
     kind,
     ...fields,
     describe(_description: string) {
+      return this;
+    },
+    regex(pattern: RegExp) {
+      this.pattern = pattern.source;
       return this;
     },
     optional() {
@@ -79,7 +85,7 @@ function summarizeSchema(schema: Schema): SchemaSummary {
 
   switch (schema.kind) {
     case "string":
-      return { type: "string", ...optional };
+      return { type: "string", ...(schema.pattern ? { pattern: schema.pattern } : {}), ...optional };
     case "boolean":
       return { type: "boolean", ...optional };
     case "number":
@@ -219,6 +225,17 @@ describe("OMP adapter registration", () => {
           },
           threads: { type: "array", element: { type: "string" }, optional: true },
           supersedes: { type: "array", element: { type: "string" }, optional: true },
+          continues: {
+            type: "array",
+            element: {
+              type: "object",
+              fields: {
+                thread: { type: "string" },
+                previousMemoryId: { type: "string", pattern: "^[1-9]\\d*$" },
+              },
+            },
+            optional: true,
+          },
           shape: { type: "string", optional: true },
           voice: { type: "string", optional: true },
           scope: { type: "string", optional: true },

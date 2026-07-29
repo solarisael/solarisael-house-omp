@@ -49,6 +49,48 @@ describe("recall compactor", () => {
     );
   });
 
+  test("preserves bounded ordered-thread evidence on surfaced memories", () => {
+    const compact = compactRecall({
+      ok: true,
+      found: true,
+      query: "continue the work page",
+      source: "rust-postgres",
+      retrievalCandidates: [{
+        source_path: "db-only/work/current",
+        title: "Current work-page decision",
+        memory_id: 22,
+        thread_key: "Solarisael website / Work page",
+        excerpt: "Current decision.",
+        thread_neighbors: Array.from({ length: 8 }, (_, index) => ({
+          thread: "Solarisael website / Work page",
+          direction: index === 0 ? "previous" : "next",
+          id: 10 + index,
+          title: `Neighbor ${index}`,
+          source_path: `db-only/work/${index}`,
+          excerpt: repeatedText(600),
+          authority_state: index === 0 ? "historical" : "active",
+          superseded_by: index === 0 ? 21 : null,
+        })),
+      }],
+    });
+
+    expect(compact.retrievalCandidates[0].memory_id).toBe(22);
+    expect(compact.retrievalCandidates[0].thread_key).toBe("Solarisael website / Work page");
+    expect(compact.retrievalCandidates[0].thread_neighbors).toHaveLength(6);
+    expect(compact.retrievalCandidates[0].thread_neighbors[0]).toEqual({
+      thread: "Solarisael website / Work page",
+      direction: "previous",
+      id: 10,
+      title: "Neighbor 0",
+      source_path: "db-only/work/0",
+      excerpt: repeatedText(500),
+      authority_state: "historical",
+      superseded_by: 21,
+    });
+    expect(compact.retrievalCandidates[0].thread_neighbors.map((neighbor) => neighbor.id))
+      .toEqual([10, 11, 12, 13, 14, 15]);
+  });
+
   test("suppresses raw chunk arrays when fused retrieval candidates exist", () => {
     const compact = compactRecall({
       ok: true,

@@ -38,6 +38,7 @@ import {
 } from "./feedback.ts";
 import {
   GIGA_OMP_ROOM_BINDING,
+  flushGigaTurnsDetached,
   gigaTransportFailure,
   requestGigaCandidateList,
   requestGigaHealth,
@@ -96,8 +97,8 @@ function sourcePathKey(value: unknown): string {
   return String(value ?? "").replace(/\\/g, "/").replace(/^house\//i, "").toLowerCase();
 }
 
-function deterministicMemorySourcePath(room: string, title: string, body: string, threads: unknown[], supersedes: unknown[]): string {
-  const canonical = JSON.stringify({ room, title, body, threads, supersedes });
+function deterministicMemorySourcePath(room: string, title: string, body: string, threads: unknown[], continues: unknown[], supersedes: unknown[]): string {
+  const canonical = JSON.stringify({ room, title, body, threads, continues, supersedes });
   const digest = createHash("sha256").update(canonical).digest("hex").slice(0, 24);
 
   const baseline = memorySourcePath(title, new Date(0));
@@ -182,17 +183,44 @@ function unknownLessonReceipt(error?: unknown): Record<string, unknown> {
   };
 }
 
-async function writeRustMemory({ room, title, body, threads, supersedes, signal }) {
+async function writeRustMemory({ room, title, body, threads, continues, supersedes, signal }) {
   const executable = discoverRustExecutable();
   const transport = rustRememberTransport();
   if (!transport) return null;
-  const normalizeIdentityValues = (values: unknown) => [...new Set((Array.isArray(values) ? values : []).map(String).map((value) => value.trim()).filter(Boolean))].sort();
+  const normalizeIdentityValues = (values: unknown) => [
+    ...new Set(
+      (Array.isArray(values) ? values : [])
+        .map(String)
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ].sort();
+
   const normalizedThreads = normalizeIdentityValues(threads);
+  const normalizedContinues = (Array.isArray(continues) ? continues : [])
+    .map((continuation) => ({
+      thread: String(continuation.thread).trim(),
+      previousMemoryId: String(continuation.previousMemoryId),
+    }))
+    .sort((left, right) => left.thread.localeCompare(right.thread));
   const normalizedSupersedes = normalizeIdentityValues(supersedes);
-  const sourcePath = deterministicMemorySourcePath(room, title, body, normalizedThreads, normalizedSupersedes);
+
+  const sourcePath = deterministicMemorySourcePath(
+    room,
+    title,
+    body,
+    normalizedThreads,
+    normalizedContinues,
+    normalizedSupersedes,
+  );
   const params: Record<string, unknown> = {
-    room, kind: "memory", title, body, source_path: sourcePath,
+    room,
+    kind: "memory",
+    title,
+    body,
+    source_path: sourcePath,
     threads: normalizedThreads,
+    continues: normalizedContinues,
     supersedes: normalizedSupersedes,
     backup: false,
   };
@@ -399,7 +427,7 @@ function safeGigaTransition(previousState, newState) {
 
 function registerHouseTool(pi, definition) {
   const execute = definition.execute;
-  const renderers = createToolRenderers(definition.name, definition.label);
+  const renderers = createToolRenderers(definition.label);
   pi.registerTool({
     ...definition,
     ...renderers,
@@ -468,6 +496,10 @@ export function registerSolarisaelTools(pi) {
         .describe("Destination store. memory (default): a thing that happened. coding-lesson: a reusable code rule with a proof pattern. project-lesson: a project-wide rule (requires 'project'). writing-lesson: a prose-taste rule (register, voice, wit mechanics). audio-lesson: an audio-pipeline rule."),
       threads: z.array(z.string()).optional().describe("memory only: thread keys, 'concept / variant / variant'."),
       supersedes: z.array(z.string()).optional().describe("memory only: positive numeric memory IDs replaced by this write; old rows remain recoverable but lose retrieval authority."),
+      continues: z.array(z.object({
+        thread: z.string(),
+        previousMemoryId: z.string().regex(/^[1-9]\d*$/),
+      })).optional().describe("memory only: predecessor edges, one per thread; thread must also appear in threads."),
       shape: z.string().optional().describe("lesson kinds: shape taxonomy value (e.g. process, naming, refusal)."),
       voice: z.string().optional().describe("coding/writing lessons: voice (e.g. craft, room-style)."),
       scope: z.string().optional().describe("coding-lesson: scope (shared or a room name)."),
@@ -491,17 +523,76 @@ export function registerSolarisaelTools(pi) {
           return Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "";
         });
         if (lessonOnly.length > 0) return refuse(`kind 'memory' does not accept: ${lessonOnly.join(", ")} — pick a lesson kind or drop the field(s)`);
-        const invalidSupersedes = (params.supersedes || []).filter((memoryId) => !/^[1-9]\d*$/.test(memoryId));
-        if (invalidSupersedes.length > 0) return refuse(`supersedes accepts positive numeric memory IDs; invalid: ${invalidSupersedes.join(", ")}`);
+        const threads = [];
+        const seenThreads = new Set();
+
+        for (const rawThread of params.threads || []) {
+          const thread = rawThread.trim();
+          if (!thread) return refuse("threads must be nonblank");
+
+          if (!seenThreads.has(thread)) {
+            seenThreads.add(thread);
+            threads.push(thread);
+          }
+        }
+
+        const continues = [];
+        const continuedThreads = new Set();
+
+        for (const continuation of params.continues || []) {
+          if (!/^[1-9]\d*$/.test(continuation.previousMemoryId)) {
+            return refuse("continues previousMemoryId must be a positive PostgreSQL BIGINT");
+          }
+          if (BigInt(continuation.previousMemoryId) > 9223372036854775807n) {
+            return refuse("continues previousMemoryId must fit a positive PostgreSQL BIGINT");
+          }
+
+          const thread = continuation.thread.trim();
+          if (!thread) return refuse("continues thread must be nonblank");
+          if (continuedThreads.has(thread)) {
+            return refuse(`continues must contain at most one entry per thread: ${thread}`);
+          }
+          if (!seenThreads.has(thread)) {
+            return refuse(`continues thread must also be present in threads: ${thread}`);
+          }
+
+          continuedThreads.add(thread);
+          continues.push({ thread, previousMemoryId: continuation.previousMemoryId });
+        }
+
+        const invalidSupersedes = (params.supersedes || [])
+          .filter((memoryId) => !/^[1-9]\d*$/.test(memoryId));
+        if (invalidSupersedes.length > 0) {
+          return refuse(`supersedes accepts positive numeric memory IDs; invalid: ${invalidSupersedes.join(", ")}`);
+        }
+
         const rustConfigured = Boolean(discoverRustExecutable());
         const result = rustConfigured
-          ? await writeRustMemory({ room, title: params.title, body: params.body, threads: params.threads || [], supersedes: [...new Set(params.supersedes || [])], signal })
-          : await writeSessionMemory({ sharedRoot, room, title: params.title, body: params.body, backup: false, threads: params.threads || [], supersedes: [...new Set(params.supersedes || [])] });
+          ? await writeRustMemory({
+            room,
+            title: params.title,
+            body: params.body,
+            threads,
+            continues,
+            supersedes: [...new Set(params.supersedes || [])],
+            signal,
+          })
+          : await writeSessionMemory({
+            sharedRoot,
+            room,
+            title: params.title,
+            body: params.body,
+            backup: false,
+            threads,
+            continues,
+            supersedes: [...new Set(params.supersedes || [])],
+          });
         return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       }
   
       if (Array.isArray(params.threads) && params.threads.length > 0) return refuse("threads are memory-only; lesson stores do not take threads");
       if (Array.isArray(params.supersedes) && params.supersedes.length > 0) return refuse("supersedes is memory-only; lesson stores do not supersede memory rows");
+      if (Array.isArray(params.continues) && params.continues.length > 0) return refuse("continues is memory-only; lesson stores do not link memory threads");
       const store = REMEMBER_STORES[kind];
       const fields = {
         shape: params.shape,
@@ -704,6 +795,9 @@ export function registerSolarisaelTools(pi) {
     approval: "write",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const { room, sharedRoot } = roomContext(ctx.cwd);
+      // Sleep is the deliberate session boundary: classify whatever the buffer still holds
+      // so the closing batch is not stranded until the next session's shutdown.
+      flushGigaTurnsDetached(ctx);
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const title = `paper boat — ${new Date().toISOString().slice(0, 10)}`;
       const result = await writeSessionMemory({
@@ -995,9 +1089,10 @@ export function registerSolarisaelTools(pi) {
     description: "Read aggregate GIGA queue, store, processing, failure, and candidate health. This does not start GIGA when the integration is disabled.",
     parameters: z.object({}),
     approval: "read",
-    async execute(_toolCallId, _params, _signal) {
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const { room } = roomContext(ctx.cwd);
       try {
-        const result = await requestGigaHealth(null, { signal: _signal });
+        const result = await requestGigaHealth(room, { signal: _signal });
         const healthy = result.enabled && result.store_healthy;
         const output = { ok: healthy, ...result };
         return {

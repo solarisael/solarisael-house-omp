@@ -315,6 +315,7 @@ export class RustTransportOutcomeUnknownError extends Error {
   }
 }
 
+const DEFAULT_NON_DEFINITIVE_TIMEOUT_MS = 120_000;
 const DEFAULT_DEFINITIVE_TIMEOUT_MS = 120_000;
 type RequestContext = {
   id: string;
@@ -328,7 +329,7 @@ type Pending = RequestContext & {
   timer?: ReturnType<typeof setTimeout>;
   signal?: AbortSignal;
   abortListener?: () => void;
-  cancellable: boolean;
+  writeCompleted: boolean;
 };
 type QueuedWrite = { id: string; pending: Pending; body: string };
 type TransportFailure = {
@@ -353,6 +354,7 @@ const MAX_STDOUT_LINE_BYTES = 1024 * 1024;
 export class RustJsonlTransport {
   private child?: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<string, Pending>();
+  private readonly abandoned = new Set<string>();
   private readonly writeQueue: QueuedWrite[] = [];
   private queuedBytes = 0;
   private writing = false;
@@ -388,7 +390,7 @@ export class RustJsonlTransport {
 
     if (this.unusable) return Promise.reject(this.unavailableAfterFailure(context));
 
-    const timeout = options.timeoutMs ?? (definitive ? DEFAULT_DEFINITIVE_TIMEOUT_MS : undefined);
+    const timeout = options.timeoutMs ?? (definitive ? DEFAULT_DEFINITIVE_TIMEOUT_MS : DEFAULT_NON_DEFINITIVE_TIMEOUT_MS);
     if (timeout !== undefined && (!Number.isFinite(timeout) || !Number.isInteger(timeout) || timeout < 0 || timeout > MAX_TIMEOUT_MS)) {
       return Promise.reject(this.unavailableFor(context, {
         code: "RUST_TRANSPORT_INVALID_TIMEOUT",
@@ -410,7 +412,6 @@ export class RustJsonlTransport {
         observed: { cancellation: "before_dispatch" },
       };
       const error = this.unavailableFor(context, failure);
-      if (!definitive) this.invalidate(error, true, failure);
       return Promise.reject(error);
     }
     if (this.pending.size >= MAX_PENDING) {
@@ -470,7 +471,7 @@ export class RustJsonlTransport {
         resolve,
         reject,
         signal: options.signal,
-        cancellable: !definitive,
+        writeCompleted: false,
       };
       this.pending.set(id, pending);
       try {
@@ -483,10 +484,12 @@ export class RustJsonlTransport {
       if (timeout !== undefined) pending.timer = setTimeout(() => this.timeoutRequest(id), timeout);
       if (options.signal) {
         const onAbort = () => {
-          if (!pending.cancellable && !pending.dispatched) {
+          if (!pending.dispatched) {
             this.cancelQueued(id, this.unavailableFor(pending, this.cancellationFailure("before_dispatch")));
-          } else if (pending.cancellable) {
-            this.abortRequest(id, this.cancellationFailure(pending.dispatched ? "after_dispatch" : "before_dispatch"));
+          } else if (!pending.definitive && pending.writeCompleted) {
+            this.abandonRequest(id, this.cancellationFailure("after_dispatch"));
+          } else if (!pending.definitive) {
+            this.abortRequest(id, this.cancellationFailure("after_dispatch"));
           }
         };
         pending.abortListener = onAbort;
@@ -563,6 +566,7 @@ export class RustJsonlTransport {
     let accepted: boolean;
     try {
       accepted = this.child.stdin.write(item.body, (error?: Error | null) => {
+        if (!error) item.pending.writeCompleted = true;
         this.writing = false;
         if (error) this.invalidate(error, true, this.streamFailure(error, "request_write", "RUST_TRANSPORT_REQUEST_WRITE_FAILED", "Rust transport request write failed"));
         else this.flushWrites();
@@ -646,6 +650,7 @@ export class RustJsonlTransport {
     const id = envelope.id;
     const pending = this.pending.get(id);
     if (!pending) {
+      if (this.abandoned.delete(id)) return;
       this.invalidate(new Error(`Rust transport received unknown or duplicate response id: ${id}`), true, this.protocolFailure(
         "RUST_TRANSPORT_UNKNOWN_RESPONSE_ID",
         `Rust transport received unknown or duplicate response id: ${id}`,
@@ -721,6 +726,20 @@ export class RustJsonlTransport {
     this.flushWrites();
   }
 
+  private abandonRequest(id: string, failure: TransportFailure): void {
+    const pending = this.pending.get(id);
+    if (!pending || !pending.dispatched || !pending.writeCompleted) return;
+    const error = this.unavailableFor(pending, failure);
+    this.pending.delete(id);
+    this.clearPending(pending);
+    this.abandoned.add(id);
+    if (this.abandoned.size > MAX_PENDING) {
+      const oldest = this.abandoned.values().next().value;
+      if (typeof oldest === "string") this.abandoned.delete(oldest);
+    }
+    pending.reject(error);
+  }
+
   private abortRequest(id: string, failure: TransportFailure): void {
     if (!this.pending.has(id)) return;
     this.invalidate(new Error(failure.message), true, failure);
@@ -762,6 +781,7 @@ export class RustJsonlTransport {
       if (kill) this.terminateChild(child);
     }
     this.writeQueue.length = 0;
+    this.abandoned.clear();
     this.queuedBytes = 0;
     this.writing = false;
     this.blocked = false;

@@ -17,6 +17,7 @@ const GIGA_EVENT_SCHEMA_VERSION = 1;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const RFC3339_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const GIGA_SHUTDOWN_WAIT_MS = 5_000;
+const GIGA_READ_TIMEOUT_MS = 120_000;
 const GIGA_MAX_SOURCE_COUNT = 8;
 const GIGA_MAX_SOURCE_BYTES = 8_000;
 const GIGA_MAX_WINDOW_BYTES = 24_000;
@@ -137,6 +138,8 @@ export type GigaHealthResult = {
     prompt_version: string;
     endpoint_scope: string;
     last_error_class: string | null;
+    last_error_at: string | null;
+    consecutive_failures: number;
   };
 };
 
@@ -594,7 +597,7 @@ export async function requestGigaCandidateList(
     room,
     review_state: options.reviewState ?? null,
     limit,
-  }, { signal: options.signal }), "giga_candidate_list");
+  }, { signal: options.signal, timeoutMs: GIGA_READ_TIMEOUT_MS }), "giga_candidate_list");
   if (!Array.isArray(response.candidates)) {
     throw Object.assign(new Error("Invalid giga_candidate_list response"), {
       code: "giga_invalid_response",
@@ -808,11 +811,14 @@ export async function requestGigaPromote(
 }
 
 export async function requestGigaHealth(
-  room: string | null,
+  room: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<GigaHealthResult> {
   const response = objectResult(
-    await requireGigaTransport().request("giga_health", { room }, { signal: options.signal }),
+    await requireGigaTransport().request("giga_health", { room }, {
+      signal: options.signal,
+      timeoutMs: GIGA_READ_TIMEOUT_MS,
+    }),
     "giga_health",
   );
   if (
@@ -822,8 +828,6 @@ export async function requestGigaHealth(
     || !(response.oldest_queue_age_seconds === null || typeof response.oldest_queue_age_seconds === "number")
     || typeof response.processed_count !== "number"
     || typeof response.failed_count !== "number"
-    || !Array.isArray(response.candidates_by_kind_state)
-    || !isObject(response.classifier)
     || !hasExactKeys(response.classifier, [
       "provider_type",
       "model",
@@ -831,6 +835,8 @@ export async function requestGigaHealth(
       "prompt_version",
       "endpoint_scope",
       "last_error_class",
+      "last_error_at",
+      "consecutive_failures",
     ])
     || typeof response.classifier.provider_type !== "string"
     || typeof response.classifier.model !== "string"
@@ -839,6 +845,9 @@ export async function requestGigaHealth(
     || typeof response.classifier.endpoint_scope !== "string"
     || !(response.classifier.last_error_class === null
       || typeof response.classifier.last_error_class === "string")
+    || !(response.classifier.last_error_at === null
+      || typeof response.classifier.last_error_at === "string")
+    || typeof response.classifier.consecutive_failures !== "number"
   ) {
     throw Object.assign(new Error("Invalid giga_health response"), {
       code: "giga_invalid_response",
@@ -889,6 +898,35 @@ async function ingestLoggedTurns(ctx: any, loggedTurns: LoggedTurn[]): Promise<v
   }
 }
 
+// enough: in-memory turn buffer, dropped on hard crash; the way up is the deferred queue
+// drainer, once giga_process reloads its own stored sources instead of taking the packet.
+// Danger: check both caps BEFORE appending — an over-deep or cross-session buffer loses
+// turns with no error. Project lesson 130 (the-athanor) carries the caps and the why.
+const GIGA_TURN_BUFFER_BYTES = 18_000;
+
+type GigaTurnBuffer = { ctx: any; cwd: string; turns: LoggedTurn[]; bytes: number };
+
+const gigaTurnBuffers = new Map<string, GigaTurnBuffer>();
+
+function appendGigaTurn(ctx: any, turn: LoggedTurn): void {
+  const cwd = String(ctx?.cwd || "");
+  const session = typeof turn.sessionID === "string" ? turn.sessionID : "";
+  const key = `${cwd}\u0000${session}`;
+  const buffered = gigaTurnBuffers.get(key) ?? { ctx, cwd, turns: [], bytes: 0 };
+  buffered.ctx = ctx;
+  const bytes = typeof turn.text === "string" ? Buffer.byteLength(turn.text, "utf8") : 0;
+  if (
+    buffered.turns.length >= GIGA_MAX_SOURCE_COUNT
+    || (buffered.turns.length > 0 && buffered.bytes + bytes > GIGA_TURN_BUFFER_BYTES)
+  ) {
+    void ingestLoggedTurns(buffered.ctx, buffered.turns.splice(0));
+    buffered.bytes = 0;
+  }
+  buffered.turns.push(turn);
+  buffered.bytes += bytes;
+  gigaTurnBuffers.set(key, buffered);
+}
+
 export function ingestGigaLoggedTurnsDetached(ctx: any, loggedTurns: LoggedTurn[]): void {
   if (
     gigaClosing
@@ -896,10 +934,22 @@ export function ingestGigaLoggedTurnsDetached(ctx: any, loggedTurns: LoggedTurn[
     || !Array.isArray(loggedTurns)
     || !loggedTurns.length
   ) return;
-  void ingestLoggedTurns(ctx, loggedTurns);
+  for (const turn of loggedTurns) appendGigaTurn(ctx, turn);
+}
+
+export function flushGigaTurnsDetached(ctx: any): void {
+  const cwd = String(ctx?.cwd || "");
+  for (const [key, buffered] of [...gigaTurnBuffers]) {
+    if (buffered.cwd !== cwd) continue;
+    gigaTurnBuffers.delete(key);
+    if (buffered.turns.length) void ingestLoggedTurns(buffered.ctx, buffered.turns);
+  }
 }
 
 export async function closeGigaTransports(): Promise<void> {
+  const pendingBuffers = [...gigaTurnBuffers.values()].filter((buffer) => buffer.turns.length);
+  gigaTurnBuffers.clear();
+  await Promise.allSettled(pendingBuffers.map((buffer) => ingestLoggedTurns(buffer.ctx, buffer.turns)));
   gigaClosing = true;
   const active = [...gigaProcesses.values()];
   if (active.length) {

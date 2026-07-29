@@ -310,7 +310,7 @@ describe("portable bundle builder safety", () => {
     await mkdir(substrate, { recursive: true });
     await writeFile(
       contract,
-      `${JSON.stringify({ format: 1, substrateApi: 1, coreApi: 1, adapterApi: 1, schemaVersion: 1 }, null, 2)}\n`,
+      `${JSON.stringify({ format: 1, substrateApi: 1, coreApi: 1, adapterApi: 1, schemaVersion: 2 }, null, 2)}\n`,
       "utf8",
     );
 
@@ -372,7 +372,7 @@ describe("portable bundle builder safety", () => {
 
     await writeFile(
       contract,
-      `${JSON.stringify({ format: 1, substrateApi: 1, coreApi: 1, adapterApi: 1, schemaVersion: 1 }, null, 2)}\n`,
+      `${JSON.stringify({ format: 1, substrateApi: 1, coreApi: 1, adapterApi: 1, schemaVersion: 2 }, null, 2)}\n`,
       "utf8",
     );
     await writeFile(

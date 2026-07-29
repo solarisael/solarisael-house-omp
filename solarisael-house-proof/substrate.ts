@@ -444,7 +444,7 @@ export function memorySourcePath(title, now = new Date()) {
   return `memory/omp_${now.toISOString().replace(/[:.]/g, "-")}_${String(title || "memory").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "memory"}.md`;
 }
 
-export async function writeSessionMemory({ sharedRoot, room, title, body, backup, type = "session", sourcePath, threads = [], supersedes = [], timeoutMs = WRITE_TIMEOUT_MS }) {
+export async function writeSessionMemory({ sharedRoot, room, title, body, backup, type = "session", sourcePath, threads = [], continues = [], supersedes = [], timeoutMs = WRITE_TIMEOUT_MS }) {
   const configurationError = substrateConfigurationError();
   if (configurationError) return { ok: false, error: configurationError };
   const { recordMemory } = substratePaths(sharedRoot);
@@ -460,6 +460,9 @@ export async function writeSessionMemory({ sharedRoot, room, title, body, backup
   ];
   for (const thread of Array.isArray(threads) ? threads : []) argv.push("--thread", String(thread));
   for (const memoryId of Array.isArray(supersedes) ? supersedes : []) argv.push("--supersedes", String(memoryId));
+  for (const continuation of Array.isArray(continues) ? continues : []) {
+    argv.push("--continues", JSON.stringify(continuation));
+  }
   if (!backup) argv.push("--no-backup");
   const probe = await runWslDiagnostic({ argv, stdin: body, timeoutMs });
   if (probe.timedOut) return { ok: false, error: "record_memory timed out" };
@@ -512,12 +515,28 @@ export async function catchBoat(sharedRoot, room) {
   }
 }
 
+export function formatUnboatedWarning(boat) {
+  const orphans = Array.isArray(boat?.unboated) ? boat.unboated : [];
+  if (orphans.length === 0) return null;
+  const plural = orphans.length === 1 ? "memory was" : "memories were";
+  return [
+    `STALE BOAT: ${orphans.length} ${plural} written AFTER this boat was cast.`,
+    "A previous session wrote memories and ended without calling sleep, so this",
+    "boat does NOT describe the most recent session. Do not treat it as current.",
+    "Recover the missing session by recalling these before answering:",
+    ...orphans.map((m) => `  - [${m?.id}] ${String(m?.title || "untitled").trim()}`),
+  ].join("\n");
+}
+
 export function formatWakeContext(boat) {
   const body = String(boat?.body || "").trim();
   if (!body) return "";
   const clipped = body.length > 6000 ? `${body.slice(0, 6000).trimEnd()}\n...[paper boat clipped ${body.length - 6000} chars]` : body;
+  const warning = formatUnboatedWarning(boat);
   return [
     "<system-reminder>",
+    warning,
+    warning ? "" : null,
     "Automatic wake: latest paper boat for this room.",
     boat?.title ? `Title: ${boat.title}` : null,
     boat?.source_path ? `Source: ${boat.source_path}` : null,

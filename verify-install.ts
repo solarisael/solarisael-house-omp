@@ -246,12 +246,12 @@ if (substrateConfigured) {
       add(checks, "compatibility contract JSON", false, error instanceof Error ? error.message : String(error));
     }
   }
-  const schemaOk = compatibilityContract?.format === 1 && compatibilityContract?.schemaVersion === 1;
+  const schemaOk = compatibilityContract?.format === 1 && compatibilityContract?.schemaVersion === 2;
   add(
     checks,
     "compatibility schema",
     schemaOk,
-    `expected format=1 schemaVersion=1; got format=${String(compatibilityContract?.format)} schemaVersion=${String(compatibilityContract?.schemaVersion)}`,
+    `expected format=1 schemaVersion=2; got format=${String(compatibilityContract?.format)} schemaVersion=${String(compatibilityContract?.schemaVersion)}`,
   );
 
   const substrateApiOk = compatibilityContract?.substrateApi === 1;

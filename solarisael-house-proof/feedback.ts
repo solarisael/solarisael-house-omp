@@ -313,6 +313,30 @@ export function emitToolUpdate(onUpdate: unknown, operation: string): void {
   (onUpdate as ToolUpdate)({ content: [{ type: "text", text: canonicalJson(update) }], details: update });
 }
 
+const SUMMARY_SKIP = /^(?:ok|status|family|version|path|query)$/i;
+const SUMMARY_MAX_FIELDS = 6;
+const SUMMARY_MAX_LENGTH = 160;
+
+function summaryFragment(key: string, value: unknown): string | null {
+  const label = key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").toLowerCase();
+  if (Array.isArray(value)) return `${value.length} ${label}`;
+  if (typeof value === "boolean") return value ? label : `not ${label}`;
+  if (typeof value === "number") return `${label} ${value}`;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= 48 ? `${label} ${trimmed}` : null;
+}
+
+function summaryFields(payload: JsonRecord): string[] {
+  const fragments: string[] = [];
+  for (const [key, value] of Object.entries(payload)) {
+    if (SUMMARY_SKIP.test(key) || SENSITIVE_KEY.test(key)) continue;
+    const fragment = summaryFragment(key, value);
+    if (fragment) fragments.push(fragment);
+  }
+  return fragments;
+}
+
 function compactResult(result: unknown): string {
   const payload = asRecord(result);
   if (payload.status === "error" || payload.ok === false) {
@@ -320,14 +344,36 @@ function compactResult(result: unknown): string {
     const message = typeof payload.message === "string" ? payload.message : "failed";
     return `${code}: ${message}`;
   }
-  if (payload.ok === true) return "Completed";
-  return "Completed";
+  let fragments = summaryFields(payload);
+  // Some payloads keep everything one level down — room_state is {path, state} — so a thin
+  // top level means the content is nested, not missing.
+  if (fragments.length < 2) {
+    for (const [key, value] of Object.entries(payload)) {
+      if (SUMMARY_SKIP.test(key) || SENSITIVE_KEY.test(key)) continue;
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      fragments = fragments.concat(summaryFields(value as JsonRecord));
+    }
+  }
+  const line = fragments.slice(0, SUMMARY_MAX_FIELDS).join(" · ");
+  if (!line) return "completed";
+  return line.length > SUMMARY_MAX_LENGTH ? `${line.slice(0, SUMMARY_MAX_LENGTH - 1)}…` : line;
 }
 
-export function createToolRenderers(name: string, label: string) {
+function primaryArgument(args: unknown): string {
+  for (const [key, value] of Object.entries(asRecord(args))) {
+    if (SENSITIVE_KEY.test(key) || typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed.length > 72 ? `${trimmed.slice(0, 71)}…` : trimmed;
+  }
+  return "";
+}
+
+export function createToolRenderers(label: string) {
+  const title = label.startsWith("Solarisael") ? label : `Solarisael ${label}`;
   return {
-    renderCall(_args: unknown, _options: unknown, theme: { fg?: (color: string, text: string) => string }) {
-      const text = `Solarisael ${label}`;
+    renderCall(args: unknown, _options: unknown, theme: { fg?: (color: string, text: string) => string }) {
+      const argument = primaryArgument(args);
+      const text = argument ? `${title}: ${argument}` : title;
       return new HouseText(theme?.fg ? theme.fg("muted", text) : text);
     },
     renderResult(result: ToolResponse, options: { expanded?: boolean; isPartial?: boolean }, theme: { fg?: (color: string, text: string) => string }) {
@@ -335,8 +381,8 @@ export function createToolRenderers(name: string, label: string) {
       const text = options?.expanded
         ? canonicalJson(payload)
         : options?.isPartial
-          ? `Solarisael ${name}: working…`
-          : `Solarisael ${name}: ${compactResult(payload)}`;
+          ? `${title}: working…`
+          : `${title}: ${compactResult(payload)}`;
       const color = isFailure(payload, result?.isError === true) ? "error" : "muted";
       return new HouseText(theme?.fg ? theme.fg(color, text) : text);
     },

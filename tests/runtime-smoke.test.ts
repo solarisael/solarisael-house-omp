@@ -35,6 +35,7 @@ type CapturedHook = {
 type Schema = {
   kind: "string" | "boolean" | "number" | "enum" | "object" | "array";
   describe(description: string): Schema;
+  regex(pattern: RegExp): Schema;
   optional(): Schema;
   default(value: unknown): Schema;
 };
@@ -117,6 +118,9 @@ function makeSchema(kind: Schema["kind"]): Schema {
   return {
     kind,
     describe(_description: string) {
+      return this;
+    },
+    regex(_pattern: RegExp) {
       return this;
     },
     optional() {
@@ -316,6 +320,9 @@ describe("OMP context hook runtime smoke", () => {
     expect(additions[0].content).toContain("A memory must stand alone.");
     expect(additions[0].content).toContain("PostgreSQL is authoritative for durable memories and lessons.");
     expect(additions[0].content).toContain("Do not claim a memory was written without a successful remember receipt.");
+    expect(additions[0].content).toContain("Athanor organs:");
+    expect(additions[0].content).toContain("A candidate is a proposal, never authority or evidence, until it is promoted.");
+    expect(additions[0].content).toContain("Authority order: PostgreSQL is authoritative");
     expect(additions[1].content).toContain("Solarisael House worker-routing mode is enabled.");
     expect(additions[1].details).toEqual({ enabled: true });
     expect(additions.map((message) => message.customType)).not.toContain("solarisael-recall-context");
@@ -672,6 +679,56 @@ describe("OMP safe tool execute runtime smoke", () => {
     );
     expect(lessonSupersession.isError).toBe(true);
     expect(parseToolJson(lessonSupersession).error).toContain("supersedes is memory-only");
+  });
+
+  test("remember validates continuation contracts before dispatch", async () => {
+    const { cwd } = await makeTempSmokeCwd();
+    const { tools } = registerAdapter();
+
+    const missingThread = await executeTool(
+      tools,
+      "remember",
+      {
+        title: "Invalid continuation membership",
+        body: "This write must be refused.",
+        threads: ["work / page"],
+        continues: [{ thread: "work / other", previousMemoryId: "41" }],
+      },
+      { cwd },
+    );
+
+    expect(missingThread.isError).toBe(true);
+    expect(parseToolJson(missingThread).error).toContain("must also be present in threads");
+
+    const invalidId = await executeTool(
+      tools,
+      "remember",
+      {
+        title: "Invalid continuation ID",
+        body: "This write must be refused.",
+        threads: ["work / page"],
+        continues: [{ thread: "work / page", previousMemoryId: "0" }],
+      },
+      { cwd },
+    );
+
+    expect(invalidId.isError).toBe(true);
+    expect(parseToolJson(invalidId).error).toContain("positive PostgreSQL BIGINT");
+
+    const lessonContinuation = await executeTool(
+      tools,
+      "remember",
+      {
+        kind: "coding-lesson",
+        title: "Wrong continuation store",
+        body: "Lesson stores must not link memory threads.",
+        continues: [{ thread: "work / page", previousMemoryId: "41" }],
+      },
+      { cwd },
+    );
+
+    expect(lessonContinuation.isError).toBe(true);
+    expect(parseToolJson(lessonContinuation).error).toContain("continues is memory-only");
   });
 
   test("routing tools expose core lane status and return dispatch receipts without spawning workers", async () => {
