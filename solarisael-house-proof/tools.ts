@@ -502,7 +502,7 @@ export function registerSolarisaelTools(pi) {
       })).optional().describe("memory only: predecessor edges, one per thread; thread must also appear in threads."),
       shape: z.string().optional().describe("lesson kinds: shape taxonomy value (e.g. process, naming, refusal)."),
       voice: z.string().optional().describe("coding/writing lessons: voice (e.g. craft, room-style)."),
-      scope: z.string().optional().describe("coding-lesson: scope (shared or a room name)."),
+      scope: z.string().optional().describe("coding-lesson: scope (house or a room name)."),
       project: z.string().optional().describe("project-lesson (required) or coding-lesson: project name."),
       proofPattern: z.string().optional().describe("coding/project lessons: the proof pattern."),
       triggerContext: z.string().optional().describe("lesson kinds: when this lesson should fire."),
