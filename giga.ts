@@ -211,10 +211,6 @@ export type GigaConversationWindow = {
   created_at: string;
 };
 
-export type GigaProcessPacket = {
-  event_id: string;
-  sources: Array<{ source_id: string; text: string }>;
-};
 
 type ResolvedGigaSource = {
   source: GigaSourceRef;
@@ -336,35 +332,6 @@ export function buildGigaConversationWindow(ctx: any, loggedTurns: LoggedTurn[])
   };
 }
 
-export function buildGigaProcessPacket(
-  event: GigaConversationWindow,
-  loggedTurns: LoggedTurn[],
-): GigaProcessPacket | null {
-  const selectedTurns = loggedTurns.slice(-GIGA_MAX_SOURCE_COUNT);
-  if (selectedTurns.length !== event.source_refs.length) return null;
-  let totalBytes = 0;
-  const sources = event.source_refs.map((source, index) => {
-    const turn = selectedTurns[index];
-    const sourceID = typeof turn?.sourceID === "string" ? turn.sourceID : "";
-    const text = typeof turn?.text === "string" ? turn.text : "";
-    const bytes = Buffer.byteLength(text, "utf8");
-    totalBytes += bytes;
-    if (
-      turn?.hasStableID !== true
-      || sourceID !== source.source_id
-      || bytes === 0
-      || bytes > GIGA_MAX_SOURCE_BYTES
-      || totalBytes > GIGA_MAX_WINDOW_BYTES
-      || sha256(text) !== source.content_hash
-    ) return null;
-    return { source_id: source.source_id, text };
-  });
-  if (sources.some((source) => source === null)) return null;
-  return {
-    event_id: event.event_id,
-    sources: sources as GigaProcessPacket["sources"],
-  };
-}
 
 function gigaWorkerError(name: string, retryable: boolean): Error & { retryable: boolean } {
   const error = Object.assign(new Error(name), { retryable });
@@ -517,14 +484,24 @@ export async function resolveGigaSourceRefsFromLedger(
 
 
 
-function gigaTransport(): RustJsonlTransport | null {
+function gigaTransport(cwd: string = process.cwd()): RustJsonlTransport | null {
   if (process.env.SOLARISAEL_GIGA_ENABLED !== "1") return null;
   const executable = discoverRustExecutable();
   if (!executable) return null;
-  let transport = gigaTransports.get(executable);
+  const trusted = roomContext(cwd);
+  const ledgerDirectory = ledgerConversationDirectory(trusted.spirit);
+  const key = `${executable}\0${trusted.room}\0${ledgerDirectory}`;
+  let transport = gigaTransports.get(key);
   if (!transport) {
-    transport = new RustJsonlTransport({ executable });
-    gigaTransports.set(executable, transport);
+    transport = new RustJsonlTransport({
+      executable,
+      cwd: trusted.effectiveRoomDir,
+      env: {
+        SOLARISAEL_GIGA_SOURCE_LEDGER_DIR: ledgerDirectory,
+        SOLARISAEL_GIGA_SOURCE_ROOM: trusted.room,
+      },
+    });
+    gigaTransports.set(key, transport);
   }
   return transport;
 }
@@ -949,9 +926,7 @@ async function ingestLoggedTurns(ctx: any, loggedTurns: LoggedTurn[]): Promise<v
   try {
     const event = buildGigaConversationWindow(ctx, loggedTurns);
     if (!event) return;
-    const packet = buildGigaProcessPacket(event, loggedTurns);
-    if (!packet) return;
-    const transport = gigaTransport();
+    const transport = gigaTransport(ctx?.cwd || process.cwd());
     if (!transport) return;
     const response = objectResult(
       await transport.request("giga_event_ingest", event as unknown as JsonObject),
@@ -967,7 +942,7 @@ async function ingestLoggedTurns(ctx: any, loggedTurns: LoggedTurn[]): Promise<v
     if (!gigaClosing && !gigaProcesses.has(event.event_id)) {
       trackGigaProcess(
         event.event_id,
-        transport.request("giga_process", packet as unknown as JsonObject),
+        transport.request("giga_process", { event_id: event.event_id }),
       );
     }
   } catch {
@@ -975,8 +950,8 @@ async function ingestLoggedTurns(ctx: any, loggedTurns: LoggedTurn[]): Promise<v
   }
 }
 
-// enough: in-memory turn buffer, dropped on hard crash; the way up is the deferred queue
-// drainer, once giga_process reloads its own stored sources instead of taking the packet.
+// enough: in-memory turn buffer, dropped on hard crash. giga_process now reloads
+// stored source references and exact ledger text from event_id alone.
 // Danger: check both caps BEFORE appending — an over-deep or cross-session buffer loses
 // turns with no error. Project lesson 130 (the-athanor) carries the caps and the why.
 const GIGA_TURN_BUFFER_BYTES = 18_000;
@@ -1054,7 +1029,6 @@ export async function closeGigaTransports(): Promise<void> {
 }
 
 export const __gigaTest = Object.freeze({
-  buildGigaProcessPacket,
   trackGigaProcess,
   resetState() {
     gigaClosing = false;

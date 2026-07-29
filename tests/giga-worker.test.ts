@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import {
   __gigaTest,
   buildGigaConversationWindow,
-  buildGigaProcessPacket,
   closeGigaTransports,
   ingestGigaLoggedTurnsDetached,
 } from "../giga.ts";
@@ -42,44 +41,54 @@ afterEach(async () => {
   __gigaTest.resetState();
 });
 
-describe("GIGA OMP adapter packet", () => {
-  test("constructs one bounded exact-source packet from durable logged turns", () => {
+describe("GIGA OMP adapter event", () => {
+  test("constructs one bounded reference-only event from durable logged turns", () => {
     const turns = [turn("turn-1", "Keep this boundary."), turn("turn-2", "Understood.", "assistant")];
     const event = buildGigaConversationWindow({ cwd: process.cwd() }, turns)!;
 
-    expect(event.source_refs.map((source) => ({ source_id: source.source_id, content_hash: source.content_hash }))).toEqual([
+    expect(event.source_refs.map((source) => ({
+      source_id: source.source_id,
+      content_hash: source.content_hash,
+    }))).toEqual([
       { source_id: "turn-1", content_hash: hash("Keep this boundary.") },
       { source_id: "turn-2", content_hash: hash("Understood.") },
     ]);
-    expect(buildGigaProcessPacket(event, turns)).toEqual({
-      event_id: event.event_id,
-      sources: [
-        { source_id: "turn-1", text: "Keep this boundary." },
-        { source_id: "turn-2", text: "Understood." },
-      ],
-    });
+    expect(JSON.stringify(event)).not.toContain("Keep this boundary.");
+    expect(JSON.stringify(event)).not.toContain("Understood.");
   });
 
-  test("rejects caller substitutions, stale hashes, and oversized source text", () => {
+  test("rejects stale hashes and unstable identities", () => {
     const exact = turn("turn-1", "Exact source.");
-    const event = buildGigaConversationWindow({ cwd: process.cwd() }, [exact])!;
-
-    expect(buildGigaProcessPacket(event, [{ ...exact, text: "Substituted source." }])).toBeNull();
-    expect(buildGigaProcessPacket(event, [{ ...exact, sourceID: "caller-source" }])).toBeNull();
-    const oversized = turn("turn-large", "x".repeat(8_001));
-    const oversizedEvent = buildGigaConversationWindow({ cwd: process.cwd() }, [oversized])!;
-    expect(buildGigaProcessPacket(oversizedEvent, [oversized])).toBeNull();
+    expect(buildGigaConversationWindow(
+      { cwd: process.cwd() },
+      [{ ...exact, contentHash: "stale" }],
+    )).toBeNull();
+    expect(buildGigaConversationWindow(
+      { cwd: process.cwd() },
+      [{ ...exact, hasStableID: false }],
+    )).toBeNull();
   });
 
-  test("uses trusted room context and configured project scope, not packet input", () => {
+  test("uses trusted room context and configured project scope", () => {
     process.env.SOLARISAEL_GIGA_PROJECT_KEY = "trusted-project";
-    const event = buildGigaConversationWindow({ cwd: process.cwd() }, [turn("turn-1", "Project rule.")])!;
-    const packet = buildGigaProcessPacket(event, [turn("turn-1", "Project rule.")])!;
+    const event = buildGigaConversationWindow(
+      { cwd: process.cwd() },
+      [turn("turn-1", "Project rule.")],
+    )!;
 
     expect(event.room).toBeTruthy();
     expect(event.project_keys).toEqual(["trusted-project"]);
-    expect(Object.keys(packet).sort()).toEqual(["event_id", "sources"]);
-    expect(Object.keys(packet.sources[0]).sort()).toEqual(["source_id", "text"]);
+    expect(Object.keys(event).sort()).toEqual([
+      "created_at",
+      "event_id",
+      "event_schema_version",
+      "event_type",
+      "lifecycle",
+      "project_keys",
+      "room",
+      "session_id",
+      "source_refs",
+    ]);
   });
 });
 
