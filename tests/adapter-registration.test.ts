@@ -151,6 +151,7 @@ const expectedToolNames = [
   "house_model_default",
   "giga_candidate_list",
   "giga_health",
+  "giga_queue_maintenance",
   "giga_review",
   "giga_promote_memory",
   "giga_promote_coding_lesson",
@@ -320,6 +321,12 @@ describe("OMP adapter registration", () => {
         },
       },
       giga_health: { type: "object", fields: {} },
+      giga_queue_maintenance: {
+        type: "object",
+        fields: {
+          operation: { type: "enum", values: ["check", "purge_stuck"] },
+        },
+      },
       giga_review: {
         type: "object",
         fields: {

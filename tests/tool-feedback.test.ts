@@ -56,6 +56,7 @@ const HOUSE_TOOL_NAMES = [
   "anamnesis_write",
   "giga_candidate_list",
   "giga_health",
+  "giga_queue_maintenance",
   "giga_review",
   "giga_promote_memory",
   "giga_promote_coding_lesson",

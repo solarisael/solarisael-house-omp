@@ -142,6 +142,22 @@ export type GigaHealthResult = {
     consecutive_failures: number;
   };
 };
+export type GigaQueueMaintenanceOperation = "check" | "purge_stuck";
+
+export type GigaQueueMaintenanceResult = {
+  ok: true;
+  operation: GigaQueueMaintenanceOperation;
+  scope: "room";
+  room: string;
+  eligible_events: number;
+  blocked_events: number;
+  deleted_events: number;
+  deleted_attempts: number;
+  preserved_candidates: number;
+  before: Array<{ queue_state: string; count: number }>;
+  after: Array<{ queue_state: string; count: number }>;
+};
+
 
 export type GigaReviewRequest = {
   candidate_id: string;
@@ -856,6 +872,67 @@ export async function requestGigaHealth(
     });
   }
   return response as GigaHealthResult;
+}
+
+export async function requestGigaQueueMaintenance(
+  room: string,
+  operation: GigaQueueMaintenanceOperation,
+  options: { signal?: AbortSignal } = {},
+): Promise<GigaQueueMaintenanceResult> {
+  if (!room.trim() || !["check", "purge_stuck"].includes(operation)) {
+    throw new TypeError("Invalid GIGA queue maintenance request");
+  }
+  const response = objectResult(
+    await requireGigaTransport().request("giga_queue_maintenance", {
+      room,
+      operation,
+      scope: "room",
+    }, {
+      signal: options.signal,
+      timeoutMs: GIGA_READ_TIMEOUT_MS,
+    }),
+    "giga_queue_maintenance",
+  );
+  const validCount = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0;
+  const validStateCounts = (value: unknown) => Array.isArray(value) && value.every((entry) =>
+    isObject(entry)
+    && hasExactKeys(entry, ["queue_state", "count"])
+    && typeof entry.queue_state === "string"
+    && validCount(entry.count)
+  );
+  if (
+    !hasExactKeys(response, [
+      "ok",
+      "operation",
+      "scope",
+      "room",
+      "eligible_events",
+      "blocked_events",
+      "deleted_events",
+      "deleted_attempts",
+      "preserved_candidates",
+      "before",
+      "after",
+    ])
+    || response.ok !== true
+    || response.operation !== operation
+    || response.scope !== "room"
+    || response.room !== room
+    || !validCount(response.eligible_events)
+    || !validCount(response.blocked_events)
+    || !validCount(response.deleted_events)
+    || !validCount(response.deleted_attempts)
+    || !validCount(response.preserved_candidates)
+    || !validStateCounts(response.before)
+    || !validStateCounts(response.after)
+  ) {
+    throw Object.assign(new Error("Invalid giga_queue_maintenance response"), {
+      code: "giga_invalid_response",
+      retryable: false,
+      details: { method: "giga_queue_maintenance" },
+    });
+  }
+  return response as GigaQueueMaintenanceResult;
 }
 
 

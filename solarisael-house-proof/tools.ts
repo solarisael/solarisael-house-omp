@@ -42,6 +42,7 @@ import {
   gigaTransportFailure,
   requestGigaCandidateList,
   requestGigaHealth,
+  requestGigaQueueMaintenance,
   requestGigaPromote,
   requestGigaReview,
   resolveGigaSourceRefsFromLedger,
@@ -1105,6 +1106,30 @@ export function registerSolarisaelTools(pi) {
       }
     },
   });
+  registerHouseTool(pi, {
+    name: "giga_queue_maintenance",
+    label: "GIGA Queue Maintenance",
+    description: "Inspect or purge disposable stuck Stage 1 GIGA work for the current room. Purge removes only pending, failed, or lease-expired running events with no attached candidates or review resonance; durable memories, lessons, candidates, and review history are preserved.",
+    parameters: z.object({
+      operation: z.enum(["check", "purge_stuck"]),
+    }),
+    approval: "write",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const { room } = roomContext(ctx.cwd);
+      try {
+        const result = await requestGigaQueueMaintenance(room, params.operation, {
+          signal: _signal,
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          details: result,
+        };
+      } catch (error) {
+        return gigaToolFailure(error);
+      }
+    },
+  });
+
 
   registerHouseTool(pi, {
     name: "giga_review",
