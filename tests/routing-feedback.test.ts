@@ -7,6 +7,7 @@ import { registerSolarisaelTools } from "../solarisael-house-proof/tools.ts";
 
 type Schema = {
   describe(description: string): Schema;
+  regex(pattern: RegExp): Schema;
   optional(): Schema;
   default(value: unknown): Schema;
 };
@@ -33,6 +34,7 @@ type CapturedTool = {
 function schema(): Schema {
   return {
     describe() { return this; },
+    regex() { return this; },
     optional() { return this; },
     default() { return this; },
   };

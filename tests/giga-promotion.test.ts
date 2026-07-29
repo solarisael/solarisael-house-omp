@@ -16,6 +16,7 @@ let sourceFailure: Error | null = null;
 
 type Schema = {
   describe(description: string): Schema;
+  regex(pattern: RegExp): Schema;
   optional(): Schema;
   default(value: unknown): Schema;
 };
@@ -28,6 +29,7 @@ type CapturedTool = {
 function schema(): Schema {
   return {
     describe() { return this; },
+    regex() { return this; },
     optional() { return this; },
     default() { return this; },
   };
