@@ -224,6 +224,7 @@ describe("OMP adapter registration", () => {
             values: ["memory", "coding-lesson", "project-lesson", "writing-lesson", "audio-lesson"],
             optional: true,
           },
+          room: { type: "enum", values: ["house"], optional: true },
           threads: { type: "array", element: { type: "string" }, optional: true },
           supersedes: { type: "array", element: { type: "string" }, optional: true },
           continues: {

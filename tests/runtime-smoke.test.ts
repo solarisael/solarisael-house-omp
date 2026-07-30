@@ -7,6 +7,7 @@ import solarisaelHouseProof from "../index.ts";
 import { roomContext, statePathForRoom } from "../solarisael-house-proof/room.ts";
 import { recallTelemetryPath } from "../solarisael-house-proof/recall-telemetry.ts";
 import { closeRustRecallTransports } from "../solarisael-house-proof/recall.ts";
+import { closeRustRememberTransports } from "../solarisael-house-proof/tools.ts";
 import { RustJsonlTransport } from "../rust-transport.ts";
 
 type CapturedTool = {
@@ -730,6 +731,61 @@ describe("OMP safe tool execute runtime smoke", () => {
     expect(lessonContinuation.isError).toBe(true);
     expect(parseToolJson(lessonContinuation).error).toContain("continues is memory-only");
   });
+  test("remember routes house-targeted memory writes to the house room and refuses room on lesson stores", async () => {
+    const { cwd } = await makeTempSmokeCwd();
+    const { tools } = registerAdapter();
+    const originalRequest = RustJsonlTransport.prototype.request;
+    const seen: Array<{ method: string; params: any }> = [];
+    try {
+      RustJsonlTransport.prototype.request = async function (method, params: any) {
+        seen.push({ method, params });
+        return {
+          memory_id: 41,
+          room: params.room,
+          source_path: params.source_path,
+          durable: true,
+          authority: "postgres",
+          warnings: [],
+        };
+      };
+
+      const houseWrite = await executeTool(
+        tools,
+        "remember",
+        { title: "House note", body: "Durable work any room can use.", room: "house" },
+        { cwd },
+      );
+      expect(Boolean(houseWrite.isError)).toBe(false);
+      expect(seen).toHaveLength(1);
+      expect(seen[0].method).toBe("remember");
+      expect(seen[0].params.room).toBe("house");
+      expect(parseToolJson(houseWrite)).toMatchObject({ ok: true, id: 41, room: "house" });
+
+      const ownWrite = await executeTool(
+        tools,
+        "remember",
+        { title: "Room note", body: "Stays in this room." },
+        { cwd },
+      );
+      expect(Boolean(ownWrite.isError)).toBe(false);
+      expect(seen).toHaveLength(2);
+      expect(seen[1].params.room).toBe(roomContext(cwd).room);
+      expect(seen[1].params.room).not.toBe("house");
+    } finally {
+      RustJsonlTransport.prototype.request = originalRequest;
+      closeRustRememberTransports();
+    }
+
+    const lessonRoom = await executeTool(
+      tools,
+      "remember",
+      { kind: "coding-lesson", title: "Wrong room", body: "Lesson stores route by scope.", room: "house" },
+      { cwd },
+    );
+    expect(lessonRoom.isError).toBe(true);
+    expect(parseToolJson(lessonRoom).error).toContain("room is memory-only");
+  });
+
 
   test("routing tools expose core lane status and return dispatch receipts without spawning workers", async () => {
     const { tools } = registerAdapter();

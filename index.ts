@@ -27,6 +27,59 @@ import { contextNudge, keywordReminder, processLessonsReminder } from "./solaris
 
 const wokenSessions = new Set();
 const modelDefaultsApplied = new Set();
+// Prompt-cache contract (2026-07-31): OMP context additions are transient and
+// re-synthesized on EVERY provider request (transformContext), never persisted.
+// Tail-appended additions shift position as history grows underneath them,
+// which breaks the Anthropic prefix cache at the first injected byte —
+// measured 2026-07-30 as full-history cacheWrite on all 106 requests of one
+// session ($256) while only the system block ever cache-hit. The contract:
+// compute additions ONCE per user turn, memoize them byte-stable, and anchor
+// every turn's additions immediately after that turn's user message so the
+// rendered prefix never moves between requests. Freshness is per user turn:
+// each new user message computes fresh recall; replays only serve the
+// requests within (and after) its own turn.
+const turnAdditionMemos = new Map();
+
+function turnAdditionMemo(sessionKey) {
+  let memo = turnAdditionMemos.get(sessionKey);
+  if (!memo) {
+    memo = new Map();
+    turnAdditionMemos.set(sessionKey, memo);
+    if (turnAdditionMemos.size > 32) {
+      turnAdditionMemos.delete(turnAdditionMemos.keys().next().value);
+    }
+  }
+  return memo;
+}
+
+function turnKeysByMessage(messages) {
+  const keys = new Map();
+  let ordinal = 0;
+  for (const message of messages) {
+    if (message?.role !== "user") continue;
+    ordinal += 1;
+    const identity = typeof message?.id === "string" && message.id
+      ? `id:${message.id}`
+      : `ord:${ordinal}:${Bun.hash(messageText(message)).toString(36)}`;
+    keys.set(message, identity);
+  }
+  return keys;
+}
+
+function anchorTurnAdditions(messages, turnKeys, memo) {
+  const output = [];
+  let inserted = false;
+  for (const message of messages) {
+    output.push(message);
+    if (message?.role !== "user") continue;
+    const additions = memo.get(turnKeys.get(message));
+    if (additions?.length) {
+      output.push(...additions);
+      inserted = true;
+    }
+  }
+  return inserted ? { messages: output } : undefined;
+}
 const recallViewportSessions = new Map();
 
 const REDACTED = "[REDACTED]";
@@ -195,6 +248,15 @@ export default function solarisaelHouseProof(pi) {
       } catch {
         // Live context and ledger writes are useful, but must never block context injection.
       }
+    }
+    const memoSessionKey = `${room}:${ctx?.sessionID || ctx?.sessionId || ctx?.cwd || effectiveRoomDir}`;
+    const turnKeys = turnKeysByMessage(messages);
+    const currentTurnKey = turnKeys.get(promptMessage);
+    const turnMemo = turnAdditionMemo(memoSessionKey);
+    if (currentTurnKey && turnMemo.has(currentTurnKey)) {
+      // Later requests of the same turn replay identical bytes so the
+      // Anthropic prefix cache can hit past the system block.
+      return anchorTurnAdditions(messages, turnKeys, turnMemo);
     }
 
     if (!existingTypes.has("solarisael-room-context")) {
@@ -475,8 +537,8 @@ export default function solarisaelHouseProof(pi) {
       });
     }
 
-    if (!additions.length) return;
-    return { messages: [...messages, ...additions] };
+    if (currentTurnKey) turnMemo.set(currentTurnKey, additions);
+    return anchorTurnAdditions(messages, turnKeys, turnMemo);
   });
 
   pi.on("shutdown", async () => {

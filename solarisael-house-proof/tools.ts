@@ -495,6 +495,8 @@ export function registerSolarisaelTools(pi) {
       body: z.string().describe("Markdown body. In Full House this complete body is stored authoritatively in PostgreSQL; a source path cannot replace it. For memory: preserve the names, observable details, actions, boundaries, and meaning needed for future recognition. The body must stand alone; a transcript may be provenance but cannot carry the only substance. For lessons: the lesson text."),
       kind: z.enum(["memory", "coding-lesson", "project-lesson", "writing-lesson", "audio-lesson"]).optional()
         .describe("Destination store. memory (default): a thing that happened. coding-lesson: a reusable code rule with a proof pattern. project-lesson: a project-wide rule (requires 'project'). writing-lesson: a prose-taste rule (register, voice, wit mechanics). audio-lesson: an audio-pipeline rule."),
+      room: z.enum(["house"]).optional()
+        .describe("memory only: omit to write to this room. 'house' writes to the House commons — durable work any room can use. A sibling room is never a valid target."),
       threads: z.array(z.string()).optional().describe("memory only: thread keys, 'concept / variant / variant'."),
       supersedes: z.array(z.string()).optional().describe("memory only: positive numeric memory IDs replaced by this write; old rows remain recoverable but lose retrieval authority."),
       continues: z.array(z.object({
@@ -524,6 +526,7 @@ export function registerSolarisaelTools(pi) {
           return Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "";
         });
         if (lessonOnly.length > 0) return refuse(`kind 'memory' does not accept: ${lessonOnly.join(", ")} — pick a lesson kind or drop the field(s)`);
+        const targetRoom = params.room === "house" ? "house" : room;
         const threads = [];
         const seenThreads = new Set();
 
@@ -570,7 +573,7 @@ export function registerSolarisaelTools(pi) {
         const rustConfigured = Boolean(discoverRustExecutable());
         const result = rustConfigured
           ? await writeRustMemory({
-            room,
+            room: targetRoom,
             title: params.title,
             body: params.body,
             threads,
@@ -580,7 +583,7 @@ export function registerSolarisaelTools(pi) {
           })
           : await writeSessionMemory({
             sharedRoot,
-            room,
+            room: targetRoom,
             title: params.title,
             body: params.body,
             backup: false,
@@ -594,6 +597,7 @@ export function registerSolarisaelTools(pi) {
       if (Array.isArray(params.threads) && params.threads.length > 0) return refuse("threads are memory-only; lesson stores do not take threads");
       if (Array.isArray(params.supersedes) && params.supersedes.length > 0) return refuse("supersedes is memory-only; lesson stores do not supersede memory rows");
       if (Array.isArray(params.continues) && params.continues.length > 0) return refuse("continues is memory-only; lesson stores do not link memory threads");
+      if (params.room) return refuse("room is memory-only; lesson stores route by scope/project, not room");
       const store = REMEMBER_STORES[kind];
       const fields = {
         shape: params.shape,
