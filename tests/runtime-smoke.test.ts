@@ -820,12 +820,17 @@ describe("OMP safe tool execute runtime smoke", () => {
     expect(readyJson).toMatchObject({
       ok: true,
       status: "ready",
+      selector: { kind: "lane", value: "tester" },
       lane: "tester",
       dispatcher: { executed: false },
-      taskPacket: { agent: "task" },
+      spawnPacket: {
+        tool: "task",
+        args: { tasks: [{ name: "Tester" }] },
+      },
     });
-    expect(readyJson.taskPacket.tasks[0].assignment).toContain("Add a focused smoke test.");
-    expect(readyJson.taskPacket.tasks[0].assignment).toContain("- Targeted test passes.");
+    expect(readyJson.spawnPacket.args.tasks[0].task).toContain("Add a focused smoke test.");
+    expect(readyJson.spawnPacket.args.tasks[0].task).toContain("- Targeted test passes.");
+    expect(readyJson.spawnPacket.args.tasks[0]).not.toHaveProperty("agent");
 
     const rejectedDispatch = await executeTool(
       tools,
@@ -839,13 +844,72 @@ describe("OMP safe tool execute runtime smoke", () => {
       ok: false,
       status: "error",
       lane: null,
-      taskPacket: null,
+      spawnPacket: null,
       details: {
         operation: "house_dispatch",
         observed: { errors: ["Unknown worker lane: advisor"] },
       },
     });
     expect(rejectedJson.errors).toEqual(["Unknown worker lane: advisor"]);
+  });
+
+  test("familiar tools load room aliases and package the bound scout lane", async () => {
+    const { cwd } = await makeTempSmokeCwd();
+    const { tools } = registerAdapter();
+    const familiarDir = path.join(cwd, "familiars");
+    await mkdir(familiarDir);
+    await writeJson(path.join(familiarDir, "spellbook.json"), {
+      version: 1,
+      collective: "familiars",
+      collectiveAliases: ["kittens"],
+      spellbookAliases: ["litters.json"],
+      familiars: [{
+        id: "cisma",
+        name: "Cisma",
+        aliases: ["scout-kitten"],
+        lane: "smol-scout",
+        description: "A bounded scout.",
+      }],
+    });
+
+    const status = await executeTool(tools, "familiar_status", {}, { cwd });
+    const statusJson = parseToolJson(status);
+    expect(status.isError).toBeUndefined();
+    expect(statusJson).toMatchObject({
+      ok: true,
+      sourceAlias: false,
+      spellbook: {
+        collective: "familiars",
+        collectiveAliases: ["kittens"],
+        spellbookAliases: ["litters.json"],
+      },
+    });
+
+    const dispatch = await executeTool(
+      tools,
+      "house_dispatch",
+      {
+        familiar: "scout-kitten",
+        task: "Map the exact target.",
+        context: [{ mode: "exact", source: "src/example.ts" }],
+        acceptance: ["Report exact symbols."],
+      },
+      { cwd },
+    );
+    const dispatchJson = parseToolJson(dispatch);
+    expect(dispatch.isError).toBeUndefined();
+    expect(dispatchJson).toMatchObject({
+      ok: true,
+      status: "ready",
+      selector: { kind: "familiar", value: "scout-kitten" },
+      familiar: { id: "cisma", lane: "smol-scout" },
+      modelRole: "pi/smol",
+      ompAgent: "scout",
+      spawnPacket: {
+        tool: "task",
+        args: { tasks: [{ name: "Cisma", agent: "scout" }] },
+      },
+    });
   });
 
   test("model default tool resolves before saving, applies resolved selectors, clears them, and reports validation errors", async () => {

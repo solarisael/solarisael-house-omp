@@ -139,9 +139,14 @@ describe("routing tool feedback", () => {
     expect(receipt).toMatchObject({
       ok: true,
       status: "ready",
+      selector: { kind: "lane", value: "tester" },
       lane: "tester",
       dispatcher: { executed: false },
-      taskPacket: { agent: "task" },
+      spawnPacket: {
+        tool: "task",
+        args: { tasks: [{ name: "Tester" }] },
+      },
     });
+    expect(receipt.spawnPacket.args.tasks[0]).not.toHaveProperty("agent");
   }, 5_000);
 });

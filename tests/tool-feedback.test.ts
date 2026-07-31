@@ -49,6 +49,8 @@ const HOUSE_TOOL_NAMES = [
   "coding_lessons",
   "sleep",
   "house_lane_status",
+  "familiar_status",
+  "familiar_dispatch",
   "house_dispatch",
   "house_routing_mode",
   "house_model_default",

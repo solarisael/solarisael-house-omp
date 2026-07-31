@@ -27,7 +27,9 @@ import {
 } from "./substrate.ts";
 import { RustJsonlTransport, RustTransportError, RustTransportOutcomeUnknownError } from "../rust-transport.ts";
 import { discoverRustExecutable } from "../discovery.ts";
-import { dispatchWorker, laneStatus } from "./routing.ts";
+import { laneStatus } from "./routing.ts";
+import { familiarStatus } from "./familiars.ts";
+import { dispatchHouse } from "./dispatch.ts";
 import { REMEMBER_STORES, buildStoreArgs } from "./stores.ts";
 import { WRITE_TIMEOUT_MS } from "./constants.ts";
 import {
@@ -838,15 +840,68 @@ export function registerSolarisaelTools(pi) {
   });
 
   registerHouseTool(pi, {
+    name: "familiar_status",
+    label: "Solarisael Familiar Status",
+    description: [
+      "Load and validate this room's familiar spellbook.",
+      "The canonical file is familiars/spellbook.json; familiars/litters.json is accepted as a room-level alias.",
+    ].join("\n"),
+    parameters: z.object({}),
+    approval: "read",
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const { effectiveRoomDir } = roomContext(ctx.cwd);
+      const result = await familiarStatus(effectiveRoomDir);
+      return {
+        isError: !result.ok,
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: result,
+      };
+    },
+  });
+
+  registerHouseTool(pi, {
+    name: "familiar_dispatch",
+    label: "Solarisael Familiar Dispatch",
+    description: [
+      "Resolve a named familiar or alias from this room's spellbook and build its bounded OMP task packet.",
+      "The familiar binds identity to an existing worker lane. This tool validates and packages; the main model still spawns explicitly.",
+    ].join("\n"),
+    parameters: z.object({
+      familiar: z.string().describe("Familiar id, name, or alias from this room's spellbook."),
+      task: z.string().describe("Exact work packet the familiar should execute."),
+      target: z.string().optional().describe("Exact target files/symbols/non-goals when known."),
+      context: z.array(z.object({
+        mode: z.enum(["exact", "gist", "image-ok", "retrieve-only"]).describe("Context treatment policy for this fragment."),
+        source: z.string().optional().describe("Source path, URI, or handle for this context fragment."),
+        content: z.string().optional().describe("Small inline context fragment, when safe."),
+        reason: z.string().optional().describe("Why this fragment is included."),
+      })).optional().describe("Context fragments tagged by exact/gist/image/retrieve-only policy."),
+      acceptance: z.array(z.string()).optional().describe("Observable acceptance checks the familiar must satisfy."),
+      risk: z.enum(["low", "medium", "high"]).optional().describe("Dispatch risk label for receipt/context."),
+    }),
+    approval: "read",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const { effectiveRoomDir } = roomContext(ctx.cwd);
+      const result = await dispatchHouse(effectiveRoomDir, params);
+      return {
+        isError: !result.ok,
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: result,
+      };
+    },
+  });
+
+  registerHouseTool(pi, {
     name: "house_dispatch",
     label: "Solarisael House Dispatch",
     description: [
-      "Validate a named Solarisael House worker lane and build a bounded OMP task packet.",
-      "This v0 tool does not spawn subagents itself; the main model uses the receipt to call task/agent explicitly.",
-      "Use named lanes. Optionally override the spawn model per dispatch; enforcement requires spawning via the eval agent() helper with the packet's model.",
+      "Resolve exactly one raw worker lane or room familiar and build a task-tool-ready spawn packet.",
+      "The returned spawnPacket.args can be passed directly to OMP's task tool. Spawning remains an explicit main-model action.",
+      "Runtime models come from the selected agent definition; per-dispatch model overrides are not supported by current OMP.",
     ].join("\n"),
     parameters: z.object({
-      lane: z.string().describe("Named worker lane, for example smol-scout, smol-executor, tester, or verifier."),
+      lane: z.string().optional().describe("Worker lane selector. Mutually exclusive with familiar."),
+      familiar: z.string().optional().describe("Room familiar id, name, or alias. Mutually exclusive with lane."),
       task: z.string().describe("Exact work packet the worker should execute."),
       target: z.string().optional().describe("Exact target files/symbols/non-goals when known."),
       context: z.array(z.object({
@@ -857,11 +912,11 @@ export function registerSolarisaelTools(pi) {
       })).optional().describe("Context fragments tagged by exact/gist/image/retrieve-only policy."),
       acceptance: z.array(z.string()).optional().describe("Observable acceptance checks the worker must satisfy."),
       risk: z.enum(["low", "medium", "high"]).optional().describe("Dispatch risk label for receipt/context."),
-      model: z.string().optional().describe("Optional per-dispatch model override: an OMP alias (smol | default | slow) or an exact provider model id. Defaults to the lane's model role mapping."),
     }),
     approval: "read",
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const result = await dispatchWorker(params);
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const { effectiveRoomDir } = roomContext(ctx.cwd);
+      const result = await dispatchHouse(effectiveRoomDir, params);
       return {
         isError: !result.ok,
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

@@ -17,7 +17,15 @@ export async function loadHouseCore() {
   if (core.CORE_API_VERSION !== CORE_API_VERSION) {
     throw new Error(`Unsupported Solarisael House core API: expected ${CORE_API_VERSION}, got ${String(core.CORE_API_VERSION)}`);
   }
-  for (const name of ["runRecallQuery", "runAnamnesisQuery", "logUserTurn", "logAssistantTurn"]) {
+  for (const name of [
+    "runRecallQuery",
+    "runAnamnesisQuery",
+    "logUserTurn",
+    "logAssistantTurn",
+    "parseFamiliarSpellbook",
+    "listFamiliars",
+    "buildFamiliarDispatchReceipt",
+  ]) {
     if (typeof core[name] !== "function") {
       throw new Error(`Solarisael House core API is missing ${name}`);
     }
@@ -41,6 +49,16 @@ export async function loadHouseLedger() {
   };
 }
 
+
+export async function loadHouseFamiliars() {
+  const core = await loadHouseCore();
+  return {
+    FAMILIAR_SPELLBOOK_FILENAMES: core.FAMILIAR_SPELLBOOK_FILENAMES,
+    parseFamiliarSpellbook: core.parseFamiliarSpellbook,
+    listFamiliars: core.listFamiliars,
+    buildFamiliarDispatchReceipt: core.buildFamiliarDispatchReceipt,
+  };
+}
 export async function loadHouseRouting() {
   return await loadHouseCore();
 }

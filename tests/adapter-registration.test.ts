@@ -146,6 +146,8 @@ const expectedToolNames = [
   "coding_lessons",
   "sleep",
   "house_lane_status",
+  "familiar_status",
+  "familiar_dispatch",
   "house_dispatch",
   "house_routing_mode",
   "house_model_default",
@@ -190,6 +192,8 @@ describe("OMP adapter registration", () => {
       coding_lessons: { approval: "read" },
       sleep: { approval: "write" },
       house_lane_status: { approval: "read" },
+      familiar_status: { approval: "read" },
+      familiar_dispatch: { approval: "read" },
       house_dispatch: { approval: "read" },
       house_routing_mode: { approval: "write" },
       house_model_default: { approval: "write" },
@@ -393,10 +397,11 @@ describe("OMP adapter registration", () => {
         },
       },
       house_lane_status: { type: "object", fields: {} },
-      house_dispatch: {
+      familiar_status: { type: "object", fields: {} },
+      familiar_dispatch: {
         type: "object",
         fields: {
-          lane: { type: "string" },
+          familiar: { type: "string" },
           task: { type: "string" },
           target: { type: "string", optional: true },
           context: {
@@ -414,7 +419,30 @@ describe("OMP adapter registration", () => {
           },
           acceptance: { type: "array", element: { type: "string" }, optional: true },
           risk: { type: "enum", values: ["low", "medium", "high"], optional: true },
-          model: { type: "string", optional: true },
+        },
+      },
+      house_dispatch: {
+        type: "object",
+        fields: {
+          lane: { type: "string", optional: true },
+          familiar: { type: "string", optional: true },
+          task: { type: "string" },
+          target: { type: "string", optional: true },
+          context: {
+            type: "array",
+            optional: true,
+            element: {
+              type: "object",
+              fields: {
+                mode: { type: "enum", values: ["exact", "gist", "image-ok", "retrieve-only"] },
+                source: { type: "string", optional: true },
+                content: { type: "string", optional: true },
+                reason: { type: "string", optional: true },
+              },
+            },
+          },
+          acceptance: { type: "array", element: { type: "string" }, optional: true },
+          risk: { type: "enum", values: ["low", "medium", "high"], optional: true },
         },
       },
       house_routing_mode: {
