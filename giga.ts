@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 
 import { discoverRustExecutable } from "./discovery.ts";
@@ -913,6 +914,26 @@ export async function requestGigaQueueMaintenance(
 }
 
 
+// Substrate giga_process is single-attempt (07-30 starvation fix): a retryable
+// classifier failure returns outcome "retry" instead of looping inside the
+// worker. The adapter owns the retry cadence so the transport stays responsive
+// between attempts. The substrate's GIGA_MAX_EVENT_ATTEMPTS cap ends the loop:
+// at cap the event transitions to failed and outcome stops being "retry".
+const GIGA_PROCESS_RETRY_DELAY_MS = 15_000;
+const GIGA_PROCESS_MAX_ADAPTER_INVOCATIONS = 12;
+
+async function runGigaProcess(
+  transport: { request(method: string, params: JsonObject): Promise<unknown> },
+  eventID: string,
+): Promise<void> {
+  for (let invocation = 0; invocation < GIGA_PROCESS_MAX_ADAPTER_INVOCATIONS; invocation += 1) {
+    const result = await transport.request("giga_process", { event_id: eventID });
+    const outcome = (result as JsonObject | null)?.outcome;
+    if (gigaClosing || outcome !== "retry") return;
+    await new Promise((resolve) => setTimeout(resolve, GIGA_PROCESS_RETRY_DELAY_MS));
+    if (gigaClosing) return;
+  }
+}
 function trackGigaProcess(eventID: string, request: Promise<unknown>): void {
   const tracked = request.then(() => undefined, () => undefined);
   gigaProcesses.set(eventID, tracked);
@@ -942,7 +963,7 @@ async function ingestLoggedTurns(ctx: any, loggedTurns: LoggedTurn[]): Promise<v
     if (!gigaClosing && !gigaProcesses.has(event.event_id)) {
       trackGigaProcess(
         event.event_id,
-        transport.request("giga_process", { event_id: event.event_id }),
+        runGigaProcess(transport, event.event_id),
       );
     }
   } catch {
@@ -979,12 +1000,30 @@ function appendGigaTurn(ctx: any, turn: LoggedTurn): void {
   gigaTurnBuffers.set(key, buffered);
 }
 
+// Stage 1 decision 7 (HIPPOCAMPUS.md §28): GIGA ingests only the main session.
+// Subagent output re-enters the ledger through the main agent's turn, so typed
+// task/subagent events stay deferred and their raw windows are excluded here.
+// Detection mirrors session-manager's own child-transcript check: a subagent
+// session file lives at `<parentStem>/<agentId>.jsonl`, so its directory name
+// plus `.jsonl` names an existing parent session file. Main sessions sit flat.
+function isSubagentSessionContext(ctx: any): boolean {
+  try {
+    const sessionFile = ctx?.sessionManager?.getSessionFile?.();
+    if (typeof sessionFile !== "string" || !sessionFile) return false;
+    return existsSync(`${path.dirname(sessionFile)}.jsonl`);
+  } catch {
+    // Unknown session shape: treat as main so ambient ingestion fails open.
+    return false;
+  }
+}
+
 export function ingestGigaLoggedTurnsDetached(ctx: any, loggedTurns: LoggedTurn[]): void {
   if (
     gigaClosing
     || process.env.SOLARISAEL_GIGA_ENABLED !== "1"
     || !Array.isArray(loggedTurns)
     || !loggedTurns.length
+    || isSubagentSessionContext(ctx)
   ) return;
   for (const turn of loggedTurns) appendGigaTurn(ctx, turn);
 }
