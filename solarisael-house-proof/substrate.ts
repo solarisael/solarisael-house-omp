@@ -6,7 +6,7 @@ import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import {
-  CODING_LESSONS_SCRIPT,
+  LESSONS_SCRIPT,
   DIAGNOSTIC_TIMEOUT_MS,
   HOUSE_CORE_ROOT,
   WRITE_TIMEOUT_MS,
@@ -546,25 +546,40 @@ export function formatWakeContext(boat) {
   ].filter((line) => line !== null).join("\n");
 }
 
-export async function runCodingLessons(effectiveRoomDir, room, shape) {
+export async function runLessons(effectiveRoomDir, room, filters) {
   const argv = [
     "--cd", "~",
-    "python3", windowsPathToWsl(CODING_LESSONS_SCRIPT),
+    "python3", windowsPathToWsl(LESSONS_SCRIPT),
     "--room-dir", windowsPathToWsl(effectiveRoomDir),
-    "--shape", String(shape),
     "--room", room,
+    "--type", String(filters.type),
+    "--limit", String(filters.limit ?? 12),
   ];
+  for (const key of ["shape", "project", "register", "stage", "query"]) {
+    const value = filters[key];
+    if (typeof value === "string" && value.trim()) {
+      argv.push(`--${key}`, value.trim());
+    }
+  }
   const probe = await runWslDiagnostic({ argv, stdin: "" });
-  if (probe.timedOut || probe.spawnError || probe.code !== 0) return { ok: false, lessons: [], taxonomy: null };
+  if (probe.timedOut) return { ok: false, lessons: [], taxonomy: [], error: "lessons query timed out" };
+  if (probe.spawnError) return { ok: false, lessons: [], taxonomy: [], error: probe.spawnError };
+  if (probe.code !== 0) {
+    return { ok: false, lessons: [], taxonomy: [], error: String(probe.stderr || "").trim() || `lessons query exited ${probe.code}` };
+  }
   try {
     const parsed = JSON.parse(String(probe.stdout || "{}"));
+    if (parsed?.ok !== true) {
+      return { ok: false, lessons: [], taxonomy: [], error: parsed?.error || "lessons query refused" };
+    }
     return {
+      ...parsed,
       ok: true,
       lessons: Array.isArray(parsed.lessons) ? parsed.lessons : [],
-      taxonomy: parsed.taxonomy && typeof parsed.taxonomy === "object" ? parsed.taxonomy : null,
+      taxonomy: Array.isArray(parsed.taxonomy) ? parsed.taxonomy : [],
     };
-  } catch {
-    return { ok: false, lessons: [], taxonomy: null };
+  } catch (error) {
+    return { ok: false, lessons: [], taxonomy: [], error: `lessons query returned invalid JSON: ${error?.message || String(error)}` };
   }
 }
 

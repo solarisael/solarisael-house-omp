@@ -46,7 +46,7 @@ const HOUSE_TOOL_NAMES = [
   "wake",
   "room_state",
   "set_room_state",
-  "coding_lessons",
+  "lessons",
   "sleep",
   "house_lane_status",
   "familiar_status",

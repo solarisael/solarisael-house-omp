@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -28,6 +28,11 @@ type Check = {
 
 type CompatibilityContract = Record<string, unknown>;
 type VerificationMode = "Base" | "Full" | "degraded";
+type PortableRelease = {
+  productVersion: string | null;
+  supportedHarnesses: string[];
+  requiredSchemaVersion: number | null;
+};
 
 
 function argument(name: string) {
@@ -37,6 +42,14 @@ function argument(name: string) {
 
 function normalized(value: string) {
   return path.resolve(value).replaceAll("\\", "/").toLowerCase();
+}
+
+function canonical(value: string) {
+  try {
+    return normalized(realpathSync(value));
+  } catch {
+    return normalized(value);
+  }
 }
 
 function absolutePath(value: string) {
@@ -104,7 +117,7 @@ function readJson(filePath: string): CompatibilityContract {
   return JSON.parse(readFileSync(filePath, "utf8")) as CompatibilityContract;
 }
 
-function verifyRustBundle(checks: Check[]): void {
+function verifyRustBundle(checks: Check[], requiredManifest: boolean): void {
   const rustRequested = Boolean(String(process.env.SOLARISAEL_HOUSE_RUST || "").trim())
     || process.env.SOLARISAEL_HOUSE_RUST_AUTO === "1";
   if (rustRequested) {
@@ -116,7 +129,10 @@ function verifyRustBundle(checks: Check[]): void {
     }
   }
   const manifestPath = path.join(adapterRoot, "rust-manifest.json");
-  if (!existsSync(manifestPath)) return;
+  if (!existsSync(manifestPath)) {
+    if (requiredManifest) add(checks, "Rust manifest", false, manifestPath);
+    return;
+  }
   let manifest: any;
   try { manifest = readJson(manifestPath); } catch (error) {
     add(checks, "Rust manifest", false, `invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
@@ -146,31 +162,62 @@ function verifyRustBundle(checks: Check[]): void {
     add(checks, "Rust artifact readable", false, error instanceof Error ? error.message : String(error));
   }
 }
-function verifyPortableManifest(checks: Check[]): void {
+function verifyPortableManifest(checks: Check[], requiredManifest: boolean): PortableRelease {
+  const empty: PortableRelease = { productVersion: null, supportedHarnesses: [], requiredSchemaVersion: null };
   const manifestPath = path.join(adapterRoot, "package-manifest.json");
-  if (!existsSync(manifestPath)) return;
+  if (!existsSync(manifestPath)) {
+    if (requiredManifest) add(checks, "package manifest", false, manifestPath);
+    return empty;
+  }
   let manifest: any;
-  try { manifest = readJson(manifestPath); } catch (error) { add(checks, "package manifest", false, error instanceof Error ? error.message : String(error)); return; }
-  const required = ["discovery.ts", "rust-transport.ts", "gui-server.ts", "installer.ts", "gui/index.html", "gui/app.js", "gui/style.css"];
-  add(checks, "GUI and installer manifest", Array.isArray(manifest.artifacts), "package-manifest.json");
-  for (const relative of required) {
-    const artifact = manifest.artifacts?.find((entry: any) => entry?.path === `solarisael-house-omp/${relative}`);
-    const file = path.join(adapterRoot, relative);
-    if (!artifact || !existsSync(file)) { add(checks, `portable artifact ${relative}`, false, file); continue; }
+  try { manifest = readJson(manifestPath); } catch (error) {
+    add(checks, "package manifest", false, error instanceof Error ? error.message : String(error));
+    return empty;
+  }
+  const productVersion = typeof manifest.productVersion === "string" && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(manifest.productVersion)
+    ? manifest.productVersion
+    : null;
+  const supportedHarnesses = Array.isArray(manifest.supportedHarnesses)
+    && manifest.supportedHarnesses.every((value: unknown) => typeof value === "string")
+    ? manifest.supportedHarnesses as string[]
+    : [];
+  const requiredSchemaVersion = Number.isSafeInteger(manifest.requiredSchemaVersion) && manifest.requiredSchemaVersion >= 0
+    ? manifest.requiredSchemaVersion as number
+    : null;
+  add(checks, "package manifest schema", manifest.schemaVersion === 2, `expected 2, got ${String(manifest.schemaVersion)}`);
+  add(checks, "package product version", Boolean(productVersion), String(manifest.productVersion));
+  add(checks, "package harness catalog", supportedHarnesses.includes("omp"), supportedHarnesses.join(", "));
+  add(checks, "package substrate schema requirement", requiredSchemaVersion !== null, String(manifest.requiredSchemaVersion));
+  if (!Array.isArray(manifest.artifacts) || manifest.artifacts.length === 0) {
+    add(checks, "package artifacts", false, manifestPath);
+    return { productVersion, supportedHarnesses, requiredSchemaVersion };
+  }
+  const installRoot = path.dirname(adapterRoot);
+  for (const artifact of manifest.artifacts) {
+    const relative = typeof artifact?.path === "string" ? artifact.path.replaceAll("\\", "/") : "";
+    const safe = relative !== "" && !relative.startsWith("/") && !/^[A-Za-z]:/.test(relative) && !relative.split("/").includes("..");
+    const file = path.resolve(installRoot, relative);
+    const insideInstall = file === installRoot || file.startsWith(`${installRoot}${path.sep}`);
+    if (!safe || !insideInstall || !existsSync(file)) {
+      add(checks, `portable artifact ${relative || "<invalid>"}`, false, file);
+      continue;
+    }
     const details = statSync(file);
-    const hash = createHash("sha256").update(readFileSync(file)).digest("hex");
-    add(checks, `portable artifact ${relative}`, details.isFile() && details.size === artifact.size && hash === artifact.sha256, file);
+    const hash = details.isFile() ? createHash("sha256").update(readFileSync(file)).digest("hex") : "";
+    const valid = details.isFile()
+      && Number.isSafeInteger(artifact.size)
+      && details.size === artifact.size
+      && typeof artifact.sha256 === "string"
+      && hash === artifact.sha256;
+    add(checks, `portable artifact ${relative}`, valid, file);
   }
-  const installer = String(manifest.installer || "");
-  const installerPath = path.join(adapterRoot, installer);
-  const details = existsSync(installerPath) ? statSync(installerPath) : null;
-  add(checks, "compiled installer", Boolean(details?.isFile()), installerPath);
-  if (details?.isFile()) {
-    const artifact = manifest.artifacts.find((entry: any) => entry?.path === `solarisael-house-omp/${installer}`);
-    const hash = createHash("sha256").update(readFileSync(installerPath)).digest("hex");
-    add(checks, "compiled installer SHA256", Boolean(artifact && hash === artifact.sha256 && details.size === artifact.size), installerPath);
-    add(checks, "compiled installer platform name", path.basename(installerPath) === (process.platform === "win32" ? "install.exe" : "install"), path.basename(installerPath));
+  for (const [label, name] of [["installer", manifest.installer], ["updater", manifest.updater]] as const) {
+    const executable = typeof name === "string" ? path.join(adapterRoot, name) : "";
+    const expected = process.platform === "win32" ? `${label === "installer" ? "install" : "update"}.exe` : label === "installer" ? "install" : "update";
+    add(checks, `compiled ${label}`, Boolean(executable && existsSync(executable) && statSync(executable).isFile()), executable || "missing");
+    add(checks, `compiled ${label} platform name`, path.basename(executable) === expected, path.basename(executable));
   }
+  return { productVersion, supportedHarnesses, requiredSchemaVersion };
 }
 
 
@@ -178,9 +225,11 @@ const scriptRoot = path.dirname(fileURLToPath(import.meta.url));
 const adapterRoot = existsSync(path.join(scriptRoot, "index.ts"))
   ? scriptRoot
   : path.join(scriptRoot, "solarisael-house-omp");
+const portableCoreRoot = path.resolve(path.dirname(adapterRoot), "solarisael-house");
+const sourceCoreRoot = path.resolve(path.dirname(adapterRoot), "the-athanor");
 const coreRoot = process.env.SOLARISAEL_HOUSE_CORE
   ? path.resolve(process.env.SOLARISAEL_HOUSE_CORE)
-  : path.resolve(path.dirname(adapterRoot), "the-athanor");
+  : existsSync(path.join(sourceCoreRoot, "index.ts")) ? sourceCoreRoot : portableCoreRoot;
 const roomArgument = argument("--room");
 const configPath = path.resolve(argument("--config") || path.join(os.homedir(), ".omp", "agent", "config.yml"));
 const substrateArgument = argument("--substrate");
@@ -329,13 +378,27 @@ if (!existsSync(configPath)) {
   add(checks, "OMP config", false, configPath);
 } else {
   const config = readFileSync(configPath, "utf8").replaceAll("\\", "/").toLowerCase();
-  const entrypoint = normalized(path.join(adapterRoot, "index.ts"));
-  const hygiene = normalized(path.join(adapterRoot, "hygiene.ts"));
-  add(checks, "OMP entrypoint configured", config.includes(entrypoint), entrypoint);
-  add(checks, "OMP hygiene configured", config.includes(hygiene), hygiene);
+  const configuredPaths = config.split(/\r?\n/)
+    .map((line) => line.trim().replace(/^-\s*/, "").replace(/^(['"])(.*)\1$/, "$2"))
+    .filter(absolutePath)
+    .map(canonical);
+  const entrypoint = canonical(path.join(adapterRoot, "index.ts"));
+  const hygiene = canonical(path.join(adapterRoot, "hygiene.ts"));
+  add(checks, "OMP entrypoint configured", configuredPaths.includes(entrypoint), entrypoint);
+  add(checks, "OMP hygiene configured", configuredPaths.includes(hygiene), hygiene);
 }
-verifyRustBundle(checks);
-verifyPortableManifest(checks);
+const requireManifest = process.argv.includes("--require-manifest");
+verifyRustBundle(checks, requireManifest);
+const portableRelease = verifyPortableManifest(checks, requireManifest);
+if (substrateConfigured && portableRelease.requiredSchemaVersion !== null) {
+  const schemaVersion = (runtimeHealth.verdict as any)?.database?.schemaVersion;
+  add(
+    checks,
+    "substrate database migration",
+    Number.isSafeInteger(schemaVersion) && schemaVersion >= portableRelease.requiredSchemaVersion,
+    `required ${portableRelease.requiredSchemaVersion}; got ${String(schemaVersion)}`,
+  );
+}
 
 const staticFailed = checks.filter((check) => !check.ok && check.name !== "substrate runtime health");
 const diagnostics: Diagnostic[] = [
@@ -356,6 +419,7 @@ const result = {
   configPath,
   roomPath: roomArgument ? path.resolve(roomArgument) : null,
   substrateRoot,
+  release: portableRelease,
   compatibilityPath: contractPath,
   compatibility: {
     ok: compatibleApis,

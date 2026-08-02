@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, test } from "bun:test";
-import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -172,7 +173,7 @@ describe("portable bundle builder safety", () => {
     await mkdir(path.join(stagedAdapter, "commands"), { recursive: true });
     await mkdir(path.join(stagedAdapter, "solarisael-house-proof"), { recursive: true });
     await cp(portableBuilder, stagedBuilder);
-    for (const filename of ["discovery.ts", "rust-transport.ts", "gui-server.ts", "installer.ts"]) await cp(path.join(adapterRoot, filename), path.join(stagedAdapter, filename));
+    for (const filename of ["discovery.ts", "harnesses.ts", "giga.ts", "rust-transport.ts", "gui-server.ts", "installer.ts", "updater.ts"]) await cp(path.join(adapterRoot, filename), path.join(stagedAdapter, filename));
     await cp(path.join(adapterRoot, "gui"), path.join(stagedAdapter, "gui"), { recursive: true });
     await cp(path.join(adapterRoot, "discovery.ts"), path.join(stagedAdapter, "discovery.ts"));
     for (const filename of ["README.md", "INSTALL.md", "USAGE.md", "IDENTITY_GUIDE.md", "LICENSE", "NOTICE"]) {
@@ -184,7 +185,7 @@ describe("portable bundle builder safety", () => {
     await cp(path.join(adapterRoot, "starter-room"), path.join(stagedAdapter, "starter-room"), { recursive: true });
     await writeFile(path.join(stagedAdapter, "index.ts"), "export {};\n", "utf8");
     await writeFile(path.join(stagedAdapter, "hygiene.ts"), "export {};\n", "utf8");
-    await writeFile(path.join(stagedAdapter, "package.json"), '{"name":"portable-adapter"}\n', "utf8");
+    await writeFile(path.join(stagedAdapter, "package.json"), '{"name":"portable-adapter","version":"0.9.0"}\n', "utf8");
     await writeFile(configPath, configBefore, "utf8");
     await writeFile(path.join(core, "src", "portable-sentinel.ts"), "export const sentinel = true;\n", "utf8");
     await writeFile(path.join(core, "index.ts"), "export {};\n", "utf8");
@@ -205,7 +206,7 @@ describe("portable bundle builder safety", () => {
     const builderSource = await readFile(portableBuilder, "utf8");
     expect(builderSource).toContain("path.dirname(adapterRoot)");
     expect(builderSource).not.toMatch(/[Cc]:[\\/](?:Projects|Solarisael)(?:[\\/]|$)/);
-  });
+  }, 20_000);
   test("includes the AI-native onboarding assets at the portable archive root", async () => {
     const root = await makeTempRoot("omp-portable-onboarding-");
     const home = path.join(root, "home");
@@ -241,14 +242,65 @@ describe("portable bundle builder safety", () => {
       "solarisael-house-omp/rust-transport.ts",
       "solarisael-house-omp/gui-server.ts",
       "solarisael-house-omp/installer.ts",
+      "solarisael-house-omp/updater.ts",
+      "solarisael-house-omp/harnesses.ts",
       "solarisael-house-omp/gui/index.html",
       "solarisael-house-omp/gui/app.js",
       "solarisael-house-omp/gui/style.css",
       "solarisael-house-omp/install.exe",
+      "solarisael-house-omp/update.exe",
       "solarisael-house-omp/package-manifest.json",
     ]));
     expect(entries).not.toContain("verify-install.ts");
     expect(entries.some((entry) => entry.startsWith("solarisael-house-substrate/"))).toBe(false);
+
+    const extracted = path.join(root, "extracted");
+    await mkdir(extracted);
+    await run("tar", ["-xf", output, "-C", extracted], root, isolatedEnv(home));
+    const packageManifest = JSON.parse(await readFile(
+      path.join(extracted, "solarisael-house-omp", "package-manifest.json"),
+      "utf8",
+    )) as {
+      schemaVersion: number;
+      productVersion: string;
+      installer: string;
+      updater: string;
+      supportedHarnesses: string[];
+      requiredSchemaVersion: number;
+      artifacts: Array<{ path: string; sha256: string; size: number }>;
+    };
+    const packageMetadata = JSON.parse(await readFile(path.join(adapterRoot, "package.json"), "utf8"));
+    expect(packageManifest).toMatchObject({
+      schemaVersion: 2,
+      productVersion: packageMetadata.version,
+      installer: "install.exe",
+      updater: "update.exe",
+      supportedHarnesses: ["omp"],
+      requiredSchemaVersion: 8,
+    });
+    const artifactPaths = packageManifest.artifacts.map((artifact) => artifact.path);
+    expect(new Set(artifactPaths).size).toBe(artifactPaths.length);
+    expect(artifactPaths).toEqual([...artifactPaths].sort((left, right) => left.localeCompare(right)));
+
+    const stagedFiles: string[] = [];
+    const collectFiles = async (directory: string): Promise<void> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) await collectFiles(file);
+        else if (entry.isFile()) stagedFiles.push(path.relative(extracted, file).replaceAll("\\", "/"));
+      }
+    };
+    await collectFiles(extracted);
+    expect(artifactPaths).toEqual(
+      stagedFiles
+        .filter((file) => file !== "solarisael-house-omp/package-manifest.json")
+        .sort((left, right) => left.localeCompare(right)),
+    );
+    for (const artifact of packageManifest.artifacts) {
+      const bytes = await readFile(path.join(extracted, artifact.path));
+      expect(bytes.byteLength).toBe(artifact.size);
+      expect(createHash("sha256").update(bytes).digest("hex")).toBe(artifact.sha256);
+    }
   }, 15_000);
   test("verifies a complete generic room and reports a missing host context entrypoint", async () => {
     const root = await makeTempRoot("omp-portable-verify-");

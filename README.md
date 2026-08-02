@@ -18,7 +18,7 @@ start at the canonical House docs:
 - a long-lived Rust transport for authoritative AKASHA memory operations
 - automatic and agent-initiated recall through the canonical House contracts
 - a hygiene extension for keeping host-generated context out of user-authored continuity
-- a private-data-free portable bundle, fictional starter room, and deterministic installation verifier
+- a private-data-free portable bundle, fictional starter room, deterministic installer, and staged release updater
 - explicit Vault, AKASHA, and configured-but-degraded status for the optional [public substrate](https://github.com/solarisael/solarisael-house-substrate)
 
 The adapter stays TypeScript for OMP lifecycle integration, room discovery, context shaping, packaging, and installation. Rust owns shared contracts and the authoritative AKASHA process. Rust-first, because the boundary is real.
@@ -48,6 +48,12 @@ The archive remains a complete Vault bundle. It does not carry a partial
 copy of the AKASHA backend; AKASHA operators install the canonical
 [`solarisael-house-substrate`](https://github.com/solarisael/solarisael-house-substrate)
 repository separately.
+
+## Release pipeline
+
+`v*` tags and manual release dispatches run the Windows x64 GitHub release job. It builds the Rust substrate, compiles `install.exe` and `update.exe`, packages the core and adapter, runs the release tests, and publishes the resulting archive. The same job emits one immutable `release-manifest.json` containing the channel, semantic version, required substrate schema, platform asset name, SHA-256 hash, and byte size.
+
+The package version must match the requested release version. Stable releases reject prerelease versions; beta and experimental releases require the corresponding semantic-version prerelease marker. See the canonical [installation protocol](https://github.com/solarisael/the-athanor/blob/main/INSTALL.md#release-installation-and-updates) for installer and updater commands.
 
 ## Retrieval evaluation
 

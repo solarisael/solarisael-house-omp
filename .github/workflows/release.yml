@@ -1,0 +1,86 @@
+name: Release Athanor House
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semantic version already present in package.json"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Check out OMP adapter
+        uses: actions/checkout@v4
+        with:
+          path: solarisael-house-omp
+      - name: Check out canonical House core
+        uses: actions/checkout@v4
+        with:
+          repository: solarisael/the-athanor
+          path: the-athanor
+      - name: Check out substrate runtime
+        uses: actions/checkout@v4
+        with:
+          repository: solarisael/solarisael-house-substrate
+          path: solarisael-house-substrate
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Resolve immutable release identity
+        shell: pwsh
+        working-directory: solarisael-house-omp
+        run: |
+          $requested = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}' }
+          $version = $requested.TrimStart('v')
+          $package = Get-Content -Raw -Encoding utf8 package.json | ConvertFrom-Json
+          if ($version -ne [string]$package.version) { throw "tag/input version $version does not match package.json $($package.version)" }
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw "invalid semantic version: $version" }
+          $channel = if ($version -match '-beta(?:[.+-]|$)') { 'beta' } elseif ($version -match '-(?:experimental|exp)(?:[.+-]|$)') { 'experimental' } elseif ($version.Contains('-')) { throw "prerelease version must use beta, experimental, or exp" } else { 'stable' }
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "CHANNEL=$channel" >> $env:GITHUB_ENV
+          "ASSET=solarisael-house-$version-windows-x64.zip" >> $env:GITHUB_ENV
+      - name: Build substrate runtime
+        run: cargo build --release --locked --manifest-path solarisael-house-substrate/Cargo.toml
+      - name: Run adapter release tests
+        working-directory: solarisael-house-omp
+        run: bun test
+      - name: Build portable release
+        shell: pwsh
+        working-directory: solarisael-house-omp
+        env:
+          SOLARISAEL_HOUSE_CORE: ${{ github.workspace }}\the-athanor
+          SOLARISAEL_HOUSE_RUST: ${{ github.workspace }}\solarisael-house-substrate\target\release\solarisael-house-substrate.exe
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          bun run build-portable.ts "dist/$env:ASSET"
+          bun run build-release-manifest.ts $env:VERSION "dist/$env:ASSET" "dist/release-manifest.json" $env:CHANNEL solarisael/solarisael-house-omp 8
+      - name: Retain immutable release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: athanor-house-${{ env.VERSION }}-windows-x64
+          path: |
+            solarisael-house-omp/dist/${{ env.ASSET }}
+            solarisael-house-omp/dist/release-manifest.json
+          if-no-files-found: error
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          prerelease: ${{ env.CHANNEL != 'stable' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            solarisael-house-omp/dist/${{ env.ASSET }}
+            solarisael-house-omp/dist/release-manifest.json

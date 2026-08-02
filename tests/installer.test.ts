@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -11,12 +11,22 @@ const run = (args: string[]) => new Promise<{ code: number; stdout: string; stde
   const child = spawn(process.execPath, [installer, ...args], { windowsHide: true }); let stdout = "", stderr = "";
   child.stdout.on("data", (x) => stdout += x); child.stderr.on("data", (x) => stderr += x); child.on("error", reject); child.on("exit", (code) => resolve({ code: code ?? -1, stdout, stderr }));
 });
-async function fixture(verifier = "console.log(JSON.stringify({ok:true}));\n") {
+async function fixture(
+  verifier = "if (!process.argv.includes('--require-manifest')) process.exit(42);\nconsole.log(JSON.stringify({ok:true}));\n",
+  includePackageManifest = true,
+) {
   const root = await mkdtemp(path.join(os.tmpdir(), "house-installer-test-")); roots.push(root); const tree = path.join(root, "tree");
   for (const d of ["solarisael-house", "solarisael-house-omp", "starter-room/example"]) await mkdir(path.join(tree, d), { recursive: true });
   await writeFile(path.join(tree, "solarisael-house/index.ts"), "export const CORE_API_VERSION=1;\n");
   await writeFile(path.join(tree, "solarisael-house-omp/index.ts"), "export const ADAPTER_API_VERSION=1;\n");
-  await writeFile(path.join(tree, "solarisael-house-omp/discovery.ts"), "export {};\n"); await writeFile(path.join(tree, "solarisael-house-omp/hygiene.ts"), "export {};\n"); await writeFile(path.join(tree, "solarisael-house-omp/verify-install.ts"), verifier);
+  await writeFile(path.join(tree, "solarisael-house-omp/discovery.ts"), "export {};\n");
+  await writeFile(path.join(tree, "solarisael-house-omp/harnesses.ts"), "export const HARNESS_IDS=['omp'];\n");
+  await writeFile(path.join(tree, "solarisael-house-omp/hygiene.ts"), "export {};\n");
+  await writeFile(path.join(tree, "solarisael-house-omp/verify-install.ts"), verifier);
+  await writeFile(path.join(tree, "solarisael-house-omp/rust-manifest.json"), JSON.stringify({ version: 1, artifacts: [] }));
+  if (includePackageManifest) {
+    await writeFile(path.join(tree, "solarisael-house-omp/package-manifest.json"), JSON.stringify({ schemaVersion: 2 }));
+  }
   await writeFile(path.join(tree, "starter-room/example/.solarisael-room.json"), JSON.stringify({ version: 1, room: "example", trueName: "Mica", operator: "Example" })); await writeFile(path.join(tree, "starter-room/example/active_spirit.md"), "# Active Spirit: Mica\nAgent: Mica | Operator: Example\n# SPIRIT: Mica\n"); await writeFile(path.join(tree, "starter-room/example/AGENTS.md"), "@active_spirit.md\n@room_summary.md\n");
   const zip = path.join(root, "bundle.zip"); const tar = spawn("tar", ["-a", "-c", "-f", zip, "-C", tree, "."], { windowsHide: true }); await new Promise<void>((resolve, reject) => { tar.on("error", reject); tar.on("exit", (c) => c === 0 ? resolve() : reject(new Error("tar failed"))); }); return { root, zip };
 }
@@ -25,6 +35,28 @@ afterEach(async () => { await Promise.all(roots.splice(0).map((x) => rm(x, { rec
 describe.serial("installer", () => {
   test("rejects unsafe room and missing required bundle without mutation", async () => { const { root, zip } = await fixture(); const target = path.join(root, "new target"); const result = await run(["--bundle", zip, "--target", target, "--room", "../escape", "--mode", "base", "--dry-run"]); expect(result.code).not.toBe(0); expect(await stat(target).catch(() => null)).toBeNull(); });
   test("dry-run validates a bundle while leaving target absent", async () => { const { root, zip } = await fixture(); const target = path.join(root, "target with spaces"); const result = await run(["--bundle", zip, "--target", target, "--room", "demo-room", "--mode", "base", "--dry-run"]); expect(result.code).toBe(0); expect(JSON.parse(result.stdout).dryRun).toBe(true); expect(await stat(target).catch(() => null)).toBeNull(); });
+  test("accepts the supported harness once and reports the selected catalog entry", async () => {
+    const { root, zip } = await fixture();
+    const result = await run(["--bundle", zip, "--target", path.join(root, "target"), "--room", "demo", "--mode", "base", "--harness", "omp", "--harness", "omp", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).harnesses).toEqual(["omp"]);
+  });
+  test("rejects an unsupported harness before mutating the target", async () => {
+    const { root, zip } = await fixture();
+    const target = path.join(root, "target");
+    const result = await run(["--bundle", zip, "--target", target, "--room", "demo", "--mode", "base", "--harness", "unknown", "--dry-run"]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("unsupported harness: unknown");
+    expect(await stat(target).catch(() => null)).toBeNull();
+  });
+  test("requires the portable package manifest before invoking verification", async () => {
+    const { root, zip } = await fixture(undefined, false);
+    const target = path.join(root, "target");
+    const result = await run(["--bundle", zip, "--target", target, "--room", "demo", "--mode", "base", "--dry-run"]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("bundle missing required file: solarisael-house-omp/package-manifest.json");
+    expect(await stat(target).catch(() => null)).toBeNull();
+  });
   test("existing target refuses without force", async () => { const { root, zip } = await fixture(); const target = path.join(root, "existing"); await mkdir(target); await writeFile(path.join(target, "keep"), "yes"); const result = await run(["--bundle", zip, "--target", target, "--room", "demo", "--mode", "base"]); expect(result.code).not.toBe(0); expect(await readFile(path.join(target, "keep"), "utf8")).toBe("yes"); });
   test("writes actual config paths while preserving unrelated config", async () => {
     const { root, zip } = await fixture(); const target = path.join(root, "install"); const config = path.join(root, "omp-config.yml");
@@ -33,7 +65,7 @@ describe.serial("installer", () => {
     expect(result.code).toBe(0);
     const written = await readFile(config, "utf8");
     expect(written).toContain("model: user-choice"); expect(written).toContain("keep-extension.ts");
-    expect(written).toContain(path.join(target, "solarisael-house-omp", "index.ts").replaceAll("\\", "/"));
+    expect(written).toContain(path.join(await realpath(target), "solarisael-house-omp", "index.ts").replaceAll("\\", "/"));
     expect(written).not.toContain("solarisael-house-omp-install");
   });
   test("full mode refuses without substrate configuration", async () => {

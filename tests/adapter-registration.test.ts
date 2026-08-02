@@ -143,7 +143,7 @@ const expectedToolNames = [
   "anamnesis_write",
   "room_state",
   "set_room_state",
-  "coding_lessons",
+  "lessons",
   "sleep",
   "house_lane_status",
   "familiar_status",
@@ -189,7 +189,7 @@ describe("OMP adapter registration", () => {
       anamnesis_write: { approval: "write" },
       room_state: { approval: "read" },
       set_room_state: { approval: "write" },
-      coding_lessons: { approval: "read" },
+      lessons: { approval: "read" },
       sleep: { approval: "write" },
       house_lane_status: { approval: "read" },
       familiar_status: { approval: "read" },
@@ -384,10 +384,16 @@ describe("OMP adapter registration", () => {
           embodiedSpirit: { type: "string", optional: true },
         },
       },
-      coding_lessons: {
+      lessons: {
         type: "object",
         fields: {
-          shape: { type: "string" },
+          type: { type: "enum", values: ["coding", "project", "writing", "audio"] },
+          shape: { type: "string", optional: true },
+          project: { type: "string", optional: true },
+          register: { type: "string", optional: true },
+          stage: { type: "string", optional: true },
+          query: { type: "string", optional: true },
+          limit: { type: "number" },
         },
       },
       sleep: {

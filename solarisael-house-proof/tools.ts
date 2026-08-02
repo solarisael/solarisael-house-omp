@@ -17,7 +17,7 @@ import {
   appendAnamnesisRep,
   catchBoat,
   deleteLesson,
-  runCodingLessons,
+  runLessons,
   substrateHealth,
   memorySourcePath,
   updateLesson,
@@ -775,20 +775,33 @@ export function registerSolarisaelTools(pi) {
   });
 
   registerHouseTool(pi, {
-    name: "coding_lessons",
-    label: "Solarisael Coding Lessons",
-    description: "Fetch coding/process lesson pairs from the substrate for a shape such as process. Use before risky process or tooling choices.",
+    name: "lessons",
+    label: "Solarisael Lessons",
+    description: "Query the canonical typed lesson registry. Supply a type; add the filters relevant to that lesson family.",
     parameters: z.object({
-      shape: z.string().default("process").describe("Lesson shape to fetch, usually process."),
+      type: z.enum(["coding", "project", "writing", "audio"]).describe("Lesson family."),
+      shape: z.string().optional().describe("Shape vocabulary filter, such as process."),
+      project: z.string().optional().describe("Required for project lessons; optional narrowing for coding lessons."),
+      register: z.string().optional().describe("Writing register filter."),
+      stage: z.string().optional().describe("Audio pipeline stage filter."),
+      query: z.string().optional().describe("Full-text lesson query."),
+      limit: z.number().default(12).describe("Maximum rows; integer from 1 through 50."),
     }),
     approval: "read",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const { room, effectiveRoomDir } = roomContext(ctx.cwd);
-      const result = await runCodingLessons(effectiveRoomDir, room, params.shape || "process");
-      const text = result.ok
-        ? JSON.stringify({ shape: params.shape || "process", lessons: result.lessons, taxonomy: result.taxonomy || null }, null, 2)
-        : JSON.stringify(result, null, 2);
-      return { isError: !result.ok, content: [{ type: "text", text }], details: { room, ok: result.ok } };
+      if (params.type === "project" && !params.project?.trim()) {
+        return refuseToolResult("project lessons require project");
+      }
+      if (!Number.isInteger(params.limit) || params.limit < 1 || params.limit > 50) {
+        return refuseToolResult("limit must be an integer from 1 through 50");
+      }
+      const result = await runLessons(effectiveRoomDir, room, params);
+      return {
+        isError: !result.ok,
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: { room, type: params.type, ok: result.ok },
+      };
     },
   });
 

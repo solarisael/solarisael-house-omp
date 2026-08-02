@@ -13,7 +13,7 @@ export const HOUSE_CORE_ROOT = process.env.SOLARISAEL_HOUSE_CORE
   : existsSync(path.join(SOURCE_CORE_ROOT, "index.ts"))
     ? SOURCE_CORE_ROOT
     : PORTABLE_CORE_ROOT;
-export const CODING_LESSONS_SCRIPT = path.join(HOUSE_CORE_ROOT, "src", "coding-lessons-by-shape.py");
+export const LESSONS_SCRIPT = path.join(HOUSE_CORE_ROOT, "src", "lessons.py");
 export const OBSIDIAN_ROOT = process.env.SOLARISAEL_VAULT_ROOT
   ? path.resolve(process.env.SOLARISAEL_VAULT_ROOT)
   : path.join(os.homedir(), "Solarisael");

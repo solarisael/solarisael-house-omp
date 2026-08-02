@@ -3,7 +3,7 @@
 
 import { loadHouseCore } from "./core.ts";
 import { conversationTurns } from "./conversation-log.ts";
-import { runCodingLessons } from "./substrate.ts";
+import { runLessons } from "./substrate.ts";
 import { messageText } from "./text.ts";
 
 const nudgeBandByRoom = new Map();
@@ -107,7 +107,7 @@ export async function processLessonsReminder(prompt, effectiveRoomDir, room) {
   const { matchProcessShape, formatProcessLessonsBanner } = await loadHouseCore();
   const triggerName = matchProcessShape(String(prompt || ""));
   if (!triggerName) return null;
-  const result = await runCodingLessons(effectiveRoomDir, room, "process");
+  const result = await runLessons(effectiveRoomDir, room, { type: "coding", shape: "process", limit: 12 });
   if (!result.ok || !Array.isArray(result.lessons) || result.lessons.length === 0) return null;
   const banner = formatProcessLessonsBanner(result.lessons, triggerName);
   return {
