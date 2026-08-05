@@ -5,6 +5,14 @@ import { loadHouseCore } from "./core.ts";
 import { conversationTurns } from "./conversation-log.ts";
 import { runLessons } from "./substrate.ts";
 import { messageText } from "./text.ts";
+import { rankEligibleLessons, runLessonContext } from "./lesson-context.ts";
+import {
+  activeLessonState,
+  currentLessonWorkingSet,
+  rememberActiveLessonState,
+  stateForLessonPrompt,
+  updateLessonWorkingSet,
+} from "./lesson-working-state.ts";
 
 const nudgeBandByRoom = new Map();
 
@@ -122,4 +130,48 @@ export async function processLessonsReminder(prompt, effectiveRoomDir, room) {
       "</system-reminder>",
     ].join("\n"),
   };
+}
+
+function formatStriatumLessons(lessons) {
+  const compact = lessons.slice(0, 6).map((lesson) => ({
+    id: lesson.id, type: lesson.type, title: lesson.title, project: lesson.project || null,
+    stage: lesson.stage || [], register: lesson.register || null,
+    similarity: lesson.semantic?.similarity ?? null, lesson: lesson.lesson,
+    proof_pattern: lesson.proof_pattern, trigger_context: lesson.trigger_context,
+  }));
+  return [
+    "<system-reminder>",
+    "Striatum activated authoritative lessons for the active exact project/work state.",
+    `Lessons: ${JSON.stringify(compact)}`,
+    "Attribution: source=lessons; ranking=Nemotron; scope/project/type/stage/register eligibility was filtered before similarity.",
+    "Hidden context only; do not persist or render.",
+    "</system-reminder>",
+  ].join("\n");
+}
+
+/**
+ * Semantic activation is deliberately downstream of exact rails. Returning
+ * null is significant: the caller preserves deterministic process lessons.
+ */
+export async function striatumLessonsReminder(prompt, effectiveRoomDir, room) {
+  const active = activeLessonState(room);
+  if (!active) return null;
+  const state = stateForLessonPrompt(active, String(prompt || ""));
+  rememberActiveLessonState(state);
+  let lessons = currentLessonWorkingSet(state);
+  let refreshed = false;
+  if (!lessons) {
+    const context = await runLessonContext({
+      effectiveRoomDir, room, projects: [state.project.project], terms: state.terms,
+      stages: state.stages, registers: state.registers, limit: 48,
+    });
+    const eligible = [...context.codingLessons, ...context.projectLessons].slice(0, 48);
+    const ranked = await rankEligibleLessons(String(prompt || state.terms.join(" ")), eligible);
+    if (!ranked) return null;
+    const selected = updateLessonWorkingSet(state, ranked);
+    lessons = selected.lessons;
+    refreshed = selected.refreshed;
+  }
+  if (!lessons.length) return null;
+  return { lessons, refreshed, text: formatStriatumLessons(lessons) };
 }

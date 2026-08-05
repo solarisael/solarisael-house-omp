@@ -23,7 +23,7 @@ import { catchBoat, formatWakeContext } from "./solarisael-house-proof/substrate
 import { messageText } from "./solarisael-house-proof/text.ts";
 import { queryAnamnesis, formatAnamnesisContext } from "./solarisael-house-proof/anamnesis.ts";
 import { registerSolarisaelTools } from "./solarisael-house-proof/tools.ts";
-import { contextNudge, keywordReminder, processLessonsReminder } from "./solarisael-house-proof/triggers.ts";
+import { contextNudge, keywordReminder, processLessonsReminder, striatumLessonsReminder } from "./solarisael-house-proof/triggers.ts";
 
 const wokenSessions = new Set();
 const modelDefaultsApplied = new Set();
@@ -371,7 +371,28 @@ export default function solarisaelHouseProof(pi) {
       });
     }
 
-    if (!existingTypes.has("solarisael-process-lessons")) {
+    let striatumActivated = existingTypes.has("solarisael-striatum-lessons");
+    if (!striatumActivated) {
+      try {
+        const striatum = await striatumLessonsReminder(prompt, effectiveRoomDir, room);
+        if (striatum) {
+          striatumActivated = true;
+          additions.push({
+            role: "custom",
+            customType: "solarisael-striatum-lessons",
+            content: striatum.text,
+            display: false,
+            details: { lessons: striatum.lessons.length, refreshed: striatum.refreshed },
+            attribution: "agent",
+            timestamp,
+          });
+        }
+      } catch {
+        // Embedding activation is advisory; deterministic process lessons remain.
+      }
+    }
+
+    if (!striatumActivated && !existingTypes.has("solarisael-process-lessons")) {
       try {
         const processLessons = await processLessonsReminder(prompt, effectiveRoomDir, room);
         if (processLessons) {

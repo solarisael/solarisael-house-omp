@@ -14,6 +14,7 @@ import os from "node:os";
 import { resolveObservedProject, type ProjectContext, type ToolCallLike } from "./solarisael-house-proof/project-context.ts";
 import { runLessonContext, type LessonContext } from "./solarisael-house-proof/lesson-context.ts";
 import { roomContext } from "./solarisael-house-proof/room.ts";
+import { deriveLessonWorkingState, rememberActiveLessonState } from "./solarisael-house-proof/lesson-working-state.ts";
 
 // A "scratch-shaped" name = throwaway artifact that must never land in a
 // synced/tracked tree. Conservative on purpose: false positives erode trust.
@@ -143,6 +144,10 @@ export default function solarisaelHygiene(pi, dependencies: HygieneDependencies 
     const call = callWithObservedInput(event);
     const project = await resolveProject(call).catch(() => null);
     if (!project) return null;
+    const target = String(call.input?.path ?? call.input?.file ?? call.input?.cwd ?? "");
+    rememberActiveLessonState(deriveLessonWorkingState({
+      room: roomContext(ctx?.cwd).room, project, toolName: call.name, target,
+    }));
     const key = `${project.root}\0${project.project}`;
     const fresh = !queried.has(key);
     if (fresh) {
