@@ -15,6 +15,6 @@
     "gui": "bun run gui-server.ts",
     "verify:install": "bun run verify-install.ts",
     "test:focused": "bun test tests/discovery.test.ts tests/portable-bundle.test.ts tests/installer.test.ts tests/gui-server.test.ts",
-    "test": "bun test"
+    "test": "bun test --max-concurrency 1 --isolate"
   }
 }
