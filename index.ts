@@ -1,6 +1,6 @@
 export const ADAPTER_API_VERSION = 1;
 
-// Solarisael House — OMP adapter entrypoint.
+// The Athanor — OMP adapter entrypoint.
 //
 // This file stays where OMP config expects it. The implementation is split into
 // shaped modules under ./solarisael-house-proof/ so this door only wires hooks.
@@ -200,7 +200,7 @@ async function recordAutomaticContextTelemetry(
 }
 
 export default function solarisaelHouseProof(pi) {
-  pi.setLabel("Solarisael House");
+  pi.setLabel("The Athanor");
 
   pi.on("context", async (event, ctx) => {
     const messages = Array.isArray(event?.messages) ? event.messages : [];
@@ -270,7 +270,7 @@ export default function solarisaelHouseProof(pi) {
           `Operator: ${houseState?.operator || operator}`,
           "Durable-memory discipline: preserve the concrete facts needed for future recognition: names, observable details, actions, boundaries, and meaning.",
           "A memory must stand alone. A transcript is provenance, not the only substance.",
-          "In Full House, PostgreSQL is authoritative for durable memories and lessons. A source path is provenance or backup, never a substitute for the database body.",
+          "In AKASHA, PostgreSQL is authoritative for durable memories and lessons. A source path is provenance or backup, never a substitute for the database body.",
           "Do not claim a memory was written without a successful remember receipt.",
           "Athanor organs: the tools below are named organs of this House, not anonymous harness utilities. Recognize each by purpose and read its live schema before use; invocation shapes change, purposes do not.",
           "recall: canon, memories, and semantic chunks. Reach for it on any uncertain name, person, project, dated claim, or prior decision. No canonical match means say you do not have it, never extrapolate from adjacent matches.",
@@ -298,7 +298,7 @@ export default function solarisaelHouseProof(pi) {
         customType: "solarisael-routing-mode",
         content: [
           "<system-reminder>",
-          "Solarisael House worker-routing mode is enabled.",
+          "The Athanor worker-routing mode is enabled.",
           "Default modus operandi for delegable work:",
           "1. Main model owns intent, inference, and final judgment.",
           "2. Use house_lane_status/house_dispatch before spawning task/subagents when work is bounded and delegable.",
@@ -470,7 +470,7 @@ export default function solarisaelHouseProof(pi) {
                 customType: "solarisael-recall-context",
                 content: [
                   "<system-reminder>",
-                  "Room-local Solarisael recall for this user turn.",
+                  "Room-local Athanor recall for this user turn.",
                   JSON.stringify(automaticCompact, null, 2),
                   "</system-reminder>",
                 ].join("\n"),

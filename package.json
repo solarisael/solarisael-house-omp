@@ -1,7 +1,7 @@
 {
-  "name": "solarisael-house-omp",
-  "version": "0.10.0",
-  "description": "OMP adapter and portable distribution for Solarisael House.",
+  "name": "the-athanor-omp",
+  "version": "0.10.1",
+  "description": "OMP adapter and portable distribution for The Athanor.",
   "author": "Sol",
   "license": "Apache-2.0",
   "repository": "github:solarisael/solarisael-house-omp",

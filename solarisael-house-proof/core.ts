@@ -1,4 +1,4 @@
-// Load the canonical Solarisael House package root.
+// Load the canonical Athanor package root.
 // OMP is an adapter: it normalizes OMP events, then calls the versioned core.
 
 import { pathToFileURL } from "node:url";
@@ -15,7 +15,7 @@ export async function loadHouseCore() {
   }
   const core = await coreModulePromise;
   if (core.CORE_API_VERSION !== CORE_API_VERSION) {
-    throw new Error(`Unsupported Solarisael House core API: expected ${CORE_API_VERSION}, got ${String(core.CORE_API_VERSION)}`);
+    throw new Error(`Unsupported Athanor core API: expected ${CORE_API_VERSION}, got ${String(core.CORE_API_VERSION)}`);
   }
   for (const name of [
     "runRecallQuery",
@@ -27,7 +27,7 @@ export async function loadHouseCore() {
     "buildFamiliarDispatchReceipt",
   ]) {
     if (typeof core[name] !== "function") {
-      throw new Error(`Solarisael House core API is missing ${name}`);
+      throw new Error(`Athanor core API is missing ${name}`);
     }
   }
   return core;

@@ -350,7 +350,7 @@ describe("portable bundle builder safety", () => {
       roomPath: room,
     });
     expect(JSON.parse(success.stdout)).toMatchObject({
-      mode: "Base",
+      mode: "Vault",
       staticOk: true,
       runtimeHealth: { state: "not-configured", ok: null },
     });
@@ -396,7 +396,7 @@ describe("portable bundle builder safety", () => {
     expect(full.exitCode).toBe(0);
     expect(JSON.parse(full.stdout)).toMatchObject({
       ok: true,
-      mode: "Full",
+      mode: "AKASHA",
       compatibility: { ok: true },
       runtimeHealth: { ok: true, state: "healthy", verdict: { mode: "full" } },
     });

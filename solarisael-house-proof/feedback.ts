@@ -154,7 +154,7 @@ function canonicalError(payload: unknown, operation: string): JsonRecord {
     ? source.message
     : typeof source.error === "string"
       ? source.error
-      : "Solarisael House tool failed";
+      : "Athanor tool failed";
   const message = redactString(sourceMessage);
   const retryable = typeof source.retryable === "boolean" ? source.retryable : false;
   const outcomeUnknown = source.outcome === "unknown" || code.toLowerCase() === "outcome_unknown";
@@ -369,7 +369,7 @@ function primaryArgument(args: unknown): string {
 }
 
 export function createToolRenderers(label: string) {
-  const title = label.startsWith("Solarisael") ? label : `Solarisael ${label}`;
+  const title = label.startsWith("Athanor") ? label : `Athanor ${label}`;
   return {
     renderCall(args: unknown, _options: unknown, theme: { fg?: (color: string, text: string) => string }) {
       const argument = primaryArgument(args);

@@ -1,4 +1,4 @@
-// OMP Solarisael House constants.
+// OMP Athanor constants.
 // Values only: paths, timeouts, filenames, and stable runtime defaults.
 
 import { existsSync } from "node:fs";

@@ -19,12 +19,12 @@ if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(productVersion)) {
 }
 const outputPath = path.resolve(process.argv[2] || path.join(adapterRoot, "dist", "solarisael-house-portable.zip"));
 
-const setup = `Solarisael House — AI-guided OMP bundle
+const setup = `The Athanor — AI-guided OMP bundle
 
 Give README.md and this extracted bundle to a tool-capable AI and ask:
 
-  Install Solarisael House with me. Preserve my existing configuration and
-  rooms, explain consequential changes, and guide the first-room session.
+  Install The Athanor with me. Preserve my existing configuration and rooms,
+  explain consequential changes, and guide the first-room session.
 
 INSTALL.md is the complete installation and verification protocol.
 IDENTITY_GUIDE.md explains how to co-author a room identity without copying the

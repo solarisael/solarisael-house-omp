@@ -90,7 +90,7 @@ async function appendRoomTranscriptTurn(ctx, turn) {
     : [
         `# Conversation log — ${stamp}`,
         "",
-        "Append-only raw-ish transcript captured by the OMP Solarisael House extension.",
+        "Append-only raw-ish transcript captured by The Athanor OMP extension.",
         "",
         "---",
         "",

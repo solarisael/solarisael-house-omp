@@ -12,7 +12,7 @@ async function postgresSourceScript() {
   const core = await loadHouseCore();
   const source = core.POSTGRES_MEMORY_SOURCE_SCRIPT;
   if (typeof source !== "string" || !source.trim()) {
-    throw new Error("Solarisael House core does not export POSTGRES_MEMORY_SOURCE_SCRIPT");
+    throw new Error("Athanor core does not export POSTGRES_MEMORY_SOURCE_SCRIPT");
   }
   return source;
 }

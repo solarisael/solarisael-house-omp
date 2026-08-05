@@ -137,8 +137,8 @@ async function pathAccessError(target) {
 /**
  * Read the canonical public substrate health verdict.
  *
- * The optional substrate never gates Base House behavior. A missing
- * SOLARISAEL_SUBSTRATE is the valid Base mode; a configured path that cannot
+ * The optional substrate never gates Vault behavior. A missing
+ * SOLARISAEL_SUBSTRATE is the valid Vault state; a configured path that cannot
  * produce a healthy, compatible verdict is explicitly degraded instead.
  */
 export async function substrateHealth(sharedRoot, timeoutMs = DIAGNOSTIC_TIMEOUT_MS) {

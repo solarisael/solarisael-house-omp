@@ -168,7 +168,7 @@ describe("OMP adapter registration", () => {
   test("registers the public adapter label and lifecycle hooks", () => {
     const { labels, hooks } = registerAdapter();
 
-    expect(labels).toEqual(["Solarisael House"]);
+    expect(labels).toEqual(["The Athanor"]);
     expect(hooks.map((hook) => hook.name)).toEqual(["context", "shutdown", "agent_end"]);
     expect(hooks.every((hook) => typeof hook.handler === "function")).toBe(true);
   });

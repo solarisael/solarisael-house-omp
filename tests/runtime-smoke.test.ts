@@ -324,7 +324,7 @@ describe("OMP context hook runtime smoke", () => {
     expect(additions[0].content).toContain("Athanor organs:");
     expect(additions[0].content).toContain("A candidate is a proposal, never authority or evidence, until it is promoted.");
     expect(additions[0].content).toContain("Authority order: PostgreSQL is authoritative");
-    expect(additions[1].content).toContain("Solarisael House worker-routing mode is enabled.");
+    expect(additions[1].content).toContain("The Athanor worker-routing mode is enabled.");
     expect(additions[1].details).toEqual({ enabled: true });
     expect(additions.map((message) => message.customType)).not.toContain("solarisael-recall-context");
     expect(additions.map((message) => message.customType)).not.toContain("solarisael-process-lessons");

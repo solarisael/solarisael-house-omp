@@ -1,11 +1,11 @@
-# Solarisael House — OMP adapter
+# The Athanor — OMP adapter
 
-**your OMP room, with memory that doesn't evaporate — start at the [House hub](https://github.com/solarisael/the-athanor).**
-This repository is the Solarisael House adapter for [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi).
+**your OMP room, with memory that doesn't evaporate — start at [The Athanor](https://github.com/solarisael/the-athanor).**
+This repository is The Athanor adapter for [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi).
 
-start at the canonical House docs:
+start at the canonical Athanor docs:
 
-- [What Solarisael House is](https://github.com/solarisael/the-athanor#readme)
+- [What The Athanor is](https://github.com/solarisael/the-athanor#readme)
 - [AI-guided OMP installation](https://github.com/solarisael/the-athanor/blob/main/INSTALL.md)
 - [Room identity guide](https://github.com/solarisael/the-athanor/blob/main/IDENTITY_GUIDE.md)
 - [How to use the House day to day](https://github.com/solarisael/the-athanor/blob/main/USAGE.md)
@@ -13,10 +13,10 @@ start at the canonical House docs:
 ## What this adapter adds
 
 - OMP lifecycle hooks for room context and end-of-session continuity
-- House tools for room state, memory, recall, lessons, paper boats, and routing
+- Athanor tools for room state, memory, recall, lessons, paper boats, and routing
 - room-local conversation logging and compact live context
 - a long-lived Rust transport for authoritative AKASHA memory operations
-- automatic and agent-initiated recall through the canonical House contracts
+- automatic and agent-initiated recall through the canonical Athanor contracts
 - a hygiene extension for keeping host-generated context out of user-authored continuity
 - state-conditioned Striatum activation that keeps three to six structurally
   eligible coding or exact-project lessons warm and lets Nemotron rank relevance

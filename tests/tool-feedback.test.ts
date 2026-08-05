@@ -221,7 +221,7 @@ describe("House tool feedback", () => {
 
   test("uses compact rendering by default and canonical JSON behind expansion", () => {
     const { renderCall, renderResult } = createToolRenderers("Remember");
-    expect(renderCall({}, {}, { fg: (_color, text) => text }).render(120)).toEqual(["Solarisael Remember"]);
+    expect(renderCall({}, {}, { fg: (_color, text) => text }).render(120)).toEqual(["Athanor Remember"]);
     const result = normalizeToolResponse({
       isError: true,
       content: [{ type: "text", text: JSON.stringify({ ok: false, error: "missing project", code: "validation_error" }) }],

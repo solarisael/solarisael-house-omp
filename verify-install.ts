@@ -27,7 +27,7 @@ type Check = {
 };
 
 type CompatibilityContract = Record<string, unknown>;
-type VerificationMode = "Base" | "Full" | "degraded";
+type VerificationMode = "Vault" | "AKASHA" | "degraded";
 type PortableRelease = {
   productVersion: string | null;
   supportedHarnesses: string[];
@@ -406,9 +406,9 @@ const diagnostics: Diagnostic[] = [
   ...(Array.isArray(runtimeHealth.verdict?.diagnostics) ? runtimeHealth.verdict.diagnostics as Diagnostic[] : []),
 ];
 const mode: VerificationMode = !substrateConfigured
-  ? "Base"
+  ? "Vault"
   : staticFailed.length === 0 && compatibleApis && runtimeHealth.ok === true
-    ? "Full"
+    ? "AKASHA"
     : "degraded";
 const result = {
   ok: staticFailed.length === 0 && mode !== "degraded",
@@ -435,10 +435,10 @@ const result = {
   runtimeHealth,
   diagnostics,
   checks,
-  next: mode === "Full"
+  next: mode === "AKASHA"
     ? "Start a fresh OMP session from the room directory and call room_state."
-    : mode === "Base"
-      ? "Base House is statically verified; substrate memory is not configured."
+    : mode === "Vault"
+      ? "Vault is statically verified; AKASHA memory is not configured."
       : "Fix substrate compatibility and runtime health, then rerun this verifier.",
 };
 

@@ -11,7 +11,7 @@ beforeAll(async () => {
     await mkdir(path.join(repo, ".git"), { recursive: true });
     await mkdir(path.join(repo, "src"), { recursive: true });
   }));
-  await writeFile(path.join(repos[0], "package.json"), JSON.stringify({ name: "solarisael-house" }));
+  await writeFile(path.join(repos[0], "package.json"), JSON.stringify({ name: "the-athanor" }));
 });
 afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -24,14 +24,14 @@ describe("project context", () => {
   test("resolves an absolute read path to its repository", async () => {
     const result = await resolveObservedProject({ name: "read", arguments: { path: path.join(repos[0], "src", "index.ts") } });
     expect(result?.root).toBe(repos[0]);
-    expect(result?.project).toBe("solarisael-house");
+    expect(result?.project).toBe("the-athanor");
   });
 
   test("aliases the three House repository roots", async () => {
-    const aliases = Object.fromEntries(repos.map((repo) => [repo, "solarisael-house"]));
+    const aliases = Object.fromEntries(repos.map((repo) => [repo, "the-athanor"]));
     for (const repo of repos) {
       const result = await resolveObservedProject({ arguments: { path: path.join(repo, "src") } }, { aliases });
-      expect(result?.project).toBe("solarisael-house");
+      expect(result?.project).toBe("the-athanor");
       expect(result?.root).toBe(repo);
     }
   });

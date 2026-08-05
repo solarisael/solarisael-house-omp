@@ -450,9 +450,9 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "recall",
-    label: "Solarisael Recall",
+    label: "Athanor Recall",
     description: [
-      "Query the Solarisael House substrate for canon, memory chunks, semantic/content matches, and a compact taxonomy map.",
+      "Query the Athanor AKASHA substrate for canon, memory chunks, semantic/content matches, and a compact taxonomy map.",
       "Use this when you notice your own uncertainty about load-bearing names, concepts, or facts.",
       "Use the taxonomy map as a bounded menu for better follow-up recall queries; do not guess shape names blindly.",
       "If no canonical match is returned, do not invent from adjacent matches; state the gap honestly.",
@@ -481,7 +481,7 @@ export function registerSolarisaelTools(pi) {
       } catch (err) {
         return {
           isError: true,
-          content: [{ type: "text", text: `Solarisael recall failed: ${err?.message || String(err)}` }],
+          content: [{ type: "text", text: `Athanor recall failed: ${err?.message || String(err)}` }],
           details: { room, error: err?.message || String(err) },
         };
       }
@@ -490,11 +490,11 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "remember",
-    label: "Solarisael Remember",
-    description: "Write a durable memory or lesson to the Solarisael substrate. In Full House, PostgreSQL is authoritative; source paths are provenance or backup, not the memory body. For memory, preserve retrieval-bearing concrete facts. Do not replace the event with only a conclusion or transcript pointer. The memory must stand alone.",
+    label: "Athanor Remember",
+    description: "Write a durable memory or lesson to the Athanor substrate. In AKASHA, PostgreSQL is authoritative; source paths are provenance or backup, not the memory body. For memory, preserve retrieval-bearing concrete facts. Do not replace the event with only a conclusion or transcript pointer. The memory must stand alone.",
     parameters: z.object({
       title: z.string().describe("Short title."),
-      body: z.string().describe("Markdown body. In Full House this complete body is stored authoritatively in PostgreSQL; a source path cannot replace it. For memory: preserve the names, observable details, actions, boundaries, and meaning needed for future recognition. The body must stand alone; a transcript may be provenance but cannot carry the only substance. For lessons: the lesson text."),
+      body: z.string().describe("Markdown body. In AKASHA this complete body is stored authoritatively in PostgreSQL; a source path cannot replace it. For memory: preserve the names, observable details, actions, boundaries, and meaning needed for future recognition. The body must stand alone; a transcript may be provenance but cannot carry the only substance. For lessons: the lesson text."),
       kind: z.enum(["memory", "coding-lesson", "project-lesson", "writing-lesson", "audio-lesson"]).optional()
         .describe("Destination store. memory (default): a thing that happened. coding-lesson: a reusable code rule with a proof pattern. project-lesson: a project-wide rule (requires 'project'). writing-lesson: a prose-taste rule (register, voice, wit mechanics). audio-lesson: an audio-pipeline rule."),
       room: z.enum(["house"]).optional()
@@ -627,7 +627,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "delete_lesson",
-    label: "Solarisael Delete Lesson (Destructive)",
+    label: "Athanor Delete Lesson (Destructive)",
     description: [
       "Permanently delete exactly one coding or project lesson by numeric ID.",
       "REQUIRES the exact current expected title; a mismatch or unknown ID refuses without deleting.",
@@ -658,7 +658,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "update_lesson",
-    label: "Solarisael Update Lesson",
+    label: "Athanor Update Lesson",
     description: [
       "Update exactly one coding or project lesson while preserving its ID.",
       "REQUIRES the exact current expected title; a mismatch or unknown ID refuses without updating.",
@@ -718,7 +718,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "wake",
-    label: "Solarisael Wake",
+    label: "Athanor Wake",
     description: "Catch the latest paper boat for this room.",
     parameters: z.object({}),
     approval: "read",
@@ -731,8 +731,8 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "room_state",
-    label: "Solarisael Room State",
-    description: "Read the current Solarisael room agency state for this workspace.",
+    label: "Athanor Room State",
+    description: "Read the current Athanor room agency state for this workspace.",
     parameters: z.object({}),
     approval: "read",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
@@ -744,7 +744,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "set_room_state",
-    label: "Solarisael Set Room State",
+    label: "Athanor Set Room State",
     description: "Update safe room agency fields: operator and embodiedSpirit. Also refreshes active_spirit.md.",
     parameters: z.object({
       operator: z.string().optional().describe("Operator display name."),
@@ -776,7 +776,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "lessons",
-    label: "Solarisael Lessons",
+    label: "Athanor Lessons",
     description: "Query the canonical typed lesson registry. Supply a type; add the filters relevant to that lesson family.",
     parameters: z.object({
       type: z.enum(["coding", "project", "writing", "audio"]).describe("Lesson family."),
@@ -807,7 +807,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "sleep",
-    label: "Solarisael Sleep",
+    label: "Athanor Sleep",
     description: "Close the session by writing one paper boat with backup enabled.",
     parameters: z.object({
       body: z.string().describe("Markdown boat: what happened, for tomorrow, reminders."),
@@ -836,9 +836,9 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "house_lane_status",
-    label: "Solarisael House Lane Status",
+    label: "Athanor Lane Status",
     description: [
-      "List deterministic Solarisael House worker lanes and their routing policies.",
+      "List deterministic Athanor worker lanes and their routing policies.",
       "Advisor review is reported separately and is not a dispatchable worker lane.",
     ].join("\n"),
     parameters: z.object({}),
@@ -854,7 +854,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "familiar_status",
-    label: "Solarisael Familiar Status",
+    label: "Athanor Familiar Status",
     description: [
       "Load and validate this room's familiar spellbook.",
       "The canonical file is familiars/spellbook.json; familiars/litters.json is accepted as a room-level alias.",
@@ -874,7 +874,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "familiar_dispatch",
-    label: "Solarisael Familiar Dispatch",
+    label: "Athanor Familiar Dispatch",
     description: [
       "Resolve a named familiar or alias from this room's spellbook and build its bounded OMP task packet.",
       "The familiar binds identity to an existing worker lane. This tool validates and packages; the main model still spawns explicitly.",
@@ -906,7 +906,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "house_dispatch",
-    label: "Solarisael House Dispatch",
+    label: "Athanor Dispatch",
     description: [
       "Resolve exactly one raw worker lane or room familiar and build a task-tool-ready spawn packet.",
       "The returned spawnPacket.args can be passed directly to OMP's task tool. Spawning remains an explicit main-model action.",
@@ -940,7 +940,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "house_routing_mode",
-    label: "Solarisael House Routing Mode",
+    label: "Athanor Routing Mode",
     description: "Read or toggle the default worker-routing modus operandi for this room.",
     parameters: z.object({
       enabled: z.boolean().optional().describe("When true, inject worker-routing guidance on future turns in this room."),
@@ -969,7 +969,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "house_model_default",
-    label: "Solarisael House Model Default",
+    label: "Athanor Model Default",
     description: "Read or set this room's default OMP model selector. Applied once near session start when enabled.",
     parameters: z.object({
       model: z.string().optional().describe("Provider/model id or role alias such as pi/default, pi/slow, or an exact provider model."),
@@ -1037,7 +1037,7 @@ export function registerSolarisaelTools(pi) {
   });
   registerHouseTool(pi, {
     name: "anamnesis",
-    label: "Solarisael Anamnesis",
+    label: "Athanor Anamnesis",
     description: "Read the Anamnesis Cabinet as bounded counsel for this room.",
     parameters: z.object({
       mode: z.enum(["wake", "consult"]),
@@ -1068,7 +1068,7 @@ export function registerSolarisaelTools(pi) {
 
   registerHouseTool(pi, {
     name: "anamnesis_write",
-    label: "Solarisael Anamnesis Write",
+    label: "Athanor Anamnesis Write",
     description: "Write an Anamnesis Cabinet drawer or append a lived repetition; writer refusals remain final.",
     parameters: z.object({
       operation: z.enum(["add", "append-rep"]),

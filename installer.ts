@@ -125,7 +125,7 @@ async function main(): Promise<Result> {
     if (verification.code) throw new Error(`bundle verification failed: ${verification.stdout || verification.stderr}`);
     if (options.mode === "full") {
       const result = JSON.parse(verification.stdout.trim());
-      if (result.mode !== "Full") throw new Error("Full verification refused: verifier mode is not exactly Full");
+      if (result.mode !== "AKASHA") throw new Error("AKASHA verification refused: verifier mode is not exactly AKASHA");
     }
     if (options.dryRun) {
       return { ok: true, target: options.target, room: options.room, harnesses: options.harnesses, dryRun: true, updated: options.update };
@@ -152,7 +152,7 @@ async function main(): Promise<Result> {
     if (finalVerification.code) throw new Error(`installed bundle verification failed: ${finalVerification.stdout || finalVerification.stderr}`);
     if (options.mode === "full") {
       const finalResult = JSON.parse(finalVerification.stdout.trim());
-      if (finalResult.mode !== "Full") throw new Error("installed Full verification refused: verifier mode is not exactly Full");
+      if (finalResult.mode !== "AKASHA") throw new Error("installed AKASHA verification refused: verifier mode is not exactly AKASHA");
     }
     if (configBackup) {
       try { await rm(configBackup, { recursive: true, force: true }); }
