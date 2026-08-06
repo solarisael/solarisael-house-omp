@@ -276,7 +276,7 @@ describe("portable bundle builder safety", () => {
       installer: "install.exe",
       updater: "update.exe",
       supportedHarnesses: ["omp"],
-      requiredSchemaVersion: 10,
+      requiredSchemaVersion: 12,
     });
     const artifactPaths = packageManifest.artifacts.map((artifact) => artifact.path);
     expect(new Set(artifactPaths).size).toBe(artifactPaths.length);

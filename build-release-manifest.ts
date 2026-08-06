@@ -14,7 +14,7 @@ const assetArgument = process.argv[3];
 const outputArgument = process.argv[4] || "release-manifest.json";
 const channel = process.argv[5] || "stable";
 const repository = process.argv[6] || "solarisael/solarisael-house-omp";
-const requiredSchemaVersion = Number(process.argv[7] || "10");
+const requiredSchemaVersion = Number(process.argv[7] || "12");
 
 if (!versionArgument || !assetArgument || !["stable", "beta", "experimental"].includes(channel)) {
   throw new Error("Usage: build-release-manifest.ts VERSION ASSET [OUTPUT] [stable|beta|experimental] [OWNER/REPO] [REQUIRED_SCHEMA_VERSION]");

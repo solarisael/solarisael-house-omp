@@ -6,9 +6,11 @@ import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import {
-  LESSONS_SCRIPT,
+  DESIGN_DOCS_SCRIPT,
+  DESIGN_DOC_WRITE_SCRIPT,
   DIAGNOSTIC_TIMEOUT_MS,
   HOUSE_CORE_ROOT,
+  LESSONS_SCRIPT,
   WRITE_TIMEOUT_MS,
 } from "./constants.ts";
 
@@ -583,6 +585,90 @@ export async function runLessons(effectiveRoomDir, room, filters) {
   }
 }
 
+export async function runDesignDocs(effectiveRoomDir, filters) {
+  const argv = [
+    "--cd", "~",
+    "python3", windowsPathToWsl(DESIGN_DOCS_SCRIPT),
+    "--room-dir", windowsPathToWsl(effectiveRoomDir),
+    "--system", String(filters.system),
+    "--limit", String(filters.limit ?? 12),
+  ];
+  for (const [key, flag] of [
+    ["docType", "--doc-type"],
+    ["name", "--name"],
+    ["group", "--group"],
+    ["query", "--query"],
+  ]) {
+    const value = filters[key];
+    if (typeof value === "string" && value.trim()) argv.push(flag, value.trim());
+  }
+  if (filters.includeSuperseded === true) argv.push("--include-superseded");
+
+  const probe = await runWslDiagnostic({ argv, stdin: "" });
+  if (probe.timedOut) return { ok: false, documents: [], taxonomy: [], error: "design document query timed out" };
+  if (probe.spawnError) return { ok: false, documents: [], taxonomy: [], error: probe.spawnError };
+  if (probe.code !== 0) {
+    return { ok: false, documents: [], taxonomy: [], error: String(probe.stderr || "").trim() || `design document query exited ${probe.code}` };
+  }
+  try {
+    const parsed = JSON.parse(String(probe.stdout || "{}"));
+    if (parsed?.ok !== true) {
+      return { ok: false, documents: [], taxonomy: [], error: parsed?.error || "design document query refused" };
+    }
+    return {
+      ...parsed,
+      ok: true,
+      documents: Array.isArray(parsed.documents) ? parsed.documents : [],
+      taxonomy: Array.isArray(parsed.taxonomy) ? parsed.taxonomy : [],
+    };
+  } catch (error) {
+    return { ok: false, documents: [], taxonomy: [], error: `design document query returned invalid JSON: ${error?.message || String(error)}` };
+  }
+}
+
+export async function writeDesignDoc({
+  effectiveRoomDir,
+  system,
+  docType,
+  name,
+  group,
+  values,
+  body,
+  provenance,
+  tags,
+  supersedes,
+  allowIdentityChange,
+  timeoutMs = WRITE_TIMEOUT_MS,
+}) {
+  const argv = [
+    "--cd", "~",
+    "python3", windowsPathToWsl(DESIGN_DOC_WRITE_SCRIPT),
+    "--room-dir", windowsPathToWsl(effectiveRoomDir),
+    "--system", String(system),
+    "--doc-type", String(docType),
+    "--name", String(name),
+  ];
+  if (typeof group === "string" && group.trim()) argv.push("--group", group.trim());
+  if (values !== undefined) argv.push("--values", JSON.stringify(values));
+  if (provenance !== undefined) argv.push("--provenance", JSON.stringify(provenance));
+  for (const tag of Array.isArray(tags) ? tags : []) argv.push("--tag", String(tag));
+  if (supersedes !== undefined) argv.push("--supersedes", String(supersedes));
+  if (allowIdentityChange === true) argv.push("--allow-identity-change");
+  const hasBody = body !== undefined;
+  if (hasBody) argv.push("--body-stdin");
+
+  const probe = await runWslDiagnostic({ argv, stdin: hasBody ? String(body) : "", timeoutMs });
+  if (probe.timedOut) return { ok: false, error: "design document write timed out" };
+  if (probe.spawnError) return { ok: false, error: probe.spawnError };
+  if (probe.code !== 0) return { ok: false, error: String(probe.stderr || "").trim() || `design document write exited ${probe.code}` };
+  try {
+    const parsed = JSON.parse(String(probe.stdout || "{}"));
+    return parsed?.ok === true ? { ...parsed, ok: true } : { ...parsed, ok: false };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err), stdout: String(probe.stdout || "").slice(0, 1200) };
+  }
+}
+
 export async function deleteLesson({ sharedRoot, effectiveRoomDir, kind, id, expectedTitle, timeoutMs = WRITE_TIMEOUT_MS }) {
   const script = path.join(HOUSE_CORE_ROOT, "src", "delete-lesson.py");
   const argv = [
@@ -613,7 +699,7 @@ export async function updateLesson({
   patch = {},
   timeoutMs = WRITE_TIMEOUT_MS,
 }) {
-  const patchKeys = ["title", "body", "shape", "triggerContext", "tags", "voice", "scope", "project", "proofPattern", "negationOf"];
+  const patchKeys = ["title", "body", "shape", "triggerContext", "tags", "voice", "scope", "project", "proofPattern", "register", "exampleText", "writers", "negationOf"];
   if (!patchKeys.some((key) => Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== undefined)) {
     return { ok: false, updated: false, error: "at least one update field is required" };
   }
@@ -634,11 +720,17 @@ export async function updateLesson({
     ["scope", "--scope"],
     ["project", "--project"],
     ["proofPattern", "--proof-pattern"],
+    ["exampleText", "--example-text"],
     ["negationOf", "--negation-of"],
   ];
   for (const [key, flag] of values) {
     if (Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== null && patch[key] !== undefined) {
       argv.push(flag, String(patch[key]));
+    }
+  }
+  for (const [key, flag] of [["register", "--register"], ["writers", "--writer"]]) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) {
+      for (const value of Array.isArray(patch[key]) ? patch[key] : []) argv.push(flag, String(value));
     }
   }
   if (Object.prototype.hasOwnProperty.call(patch, "negationOf") && patch.negationOf === null) {

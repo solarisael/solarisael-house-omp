@@ -68,8 +68,8 @@ const ENV_KEYS = [
   "SOLARISAEL_HOUSE_DISABLE_POSTGRES",
   "SOLARISAEL_HOUSE_RUST",
   "SOLARISAEL_SUBSTRATE",
+  "SOLARISAEL_TEST_NATIVE_PYTHON",
 ];
-
 function snapshotEnv() {
   return Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 }
@@ -680,6 +680,156 @@ describe("OMP safe tool execute runtime smoke", () => {
     );
     expect(lessonSupersession.isError).toBe(true);
     expect(parseToolJson(lessonSupersession).error).toContain("supersedes is memory-only");
+  });
+
+  test("update_lesson rejects fields from the wrong typed store", async () => {
+    const { cwd } = await makeTempSmokeCwd();
+    const { tools } = registerAdapter();
+
+    const writingScope = await executeTool(
+      tools,
+      "update_lesson",
+      {
+        kind: "writing-lesson",
+        id: "41",
+        expectedTitle: "Writing rule",
+        scope: "house",
+      },
+      { cwd },
+    );
+    expect(writingScope.isError).toBe(true);
+    expect(parseToolJson(writingScope).error).toContain("field not allowed for writing-lesson: scope");
+
+    const codingRegister = await executeTool(
+      tools,
+      "update_lesson",
+      {
+        kind: "coding-lesson",
+        id: "42",
+        expectedTitle: "Coding rule",
+        register: ["prose"],
+      },
+      { cwd },
+    );
+    expect(codingRegister.isError).toBe(true);
+    expect(parseToolJson(codingRegister).error).toContain("field not allowed for coding-lesson: register");
+  });
+
+  test("design_doc_write routes catalogue writes to its organ and refuses a missing system", async () => {
+    const { cwd } = await makeTempSmokeCwd();
+    const { tools } = registerAdapter();
+    const snapshot = snapshotEnv();
+    try {
+      process.env.SOLARISAEL_TEST_NATIVE_PYTHON = "1";
+      const routed = await executeTool(
+        tools,
+        "design_doc_write",
+        {
+          system: "solarisael",
+          docType: "token",
+          name: "color.accent",
+          values: { hex: "#d4af37" },
+          provenance: { repo: "solarisael-house-site" },
+        },
+        { cwd },
+      );
+      expect(routed.isError).toBe(true);
+      expect(parseToolJson(routed).error).toContain("one of the arguments --body --body-stdin is required");
+    } finally {
+      restoreEnv(snapshot);
+    }
+
+    const missingSystem = await executeTool(
+      tools,
+      "design_doc_write",
+      {
+        docType: "token",
+        name: "color.accent",
+        body: "The current accent token.",
+      },
+      { cwd },
+    );
+    expect(missingSystem.isError).toBe(true);
+    expect(parseToolJson(missingSystem).error).toBe("system is required");
+  });
+
+  test("remember routes design lessons with the design defaults and refuses audio-only fields", async () => {
+    const { cwd } = await makeTempSmokeCwd();
+    const { tools } = registerAdapter();
+    const snapshot = snapshotEnv();
+    const originalRequest = RustJsonlTransport.prototype.request;
+    let observed: { method: string; params: any } | undefined;
+    try {
+      process.env.SOLARISAEL_HOUSE_RUST = process.execPath;
+      closeRustRememberTransports();
+      RustJsonlTransport.prototype.request = async function (method, params: any) {
+        observed = { method, params };
+        return {
+          lesson_id: 51,
+          kind: params.kind,
+          durable: true,
+          authority: "postgres",
+          warnings: [],
+        };
+      };
+
+      const designWrite = await executeTool(
+        tools,
+        "remember",
+        {
+          kind: "design-lesson",
+          title: "Keep interaction floors explicit",
+          body: "Every component contract names its keyboard and contrast floor.",
+          voice: "system-craft",
+          shape: "component-contract",
+          proofPattern: "Exercise keyboard interaction and contrast checks.",
+          triggerContext: "Before adding a component variant.",
+          exampleText: "A menu opens with Enter and closes with Escape.",
+          tags: ["a11y", "components"],
+        },
+        { cwd },
+      );
+
+      expect(designWrite.isError).toBeUndefined();
+      expect(parseToolJson(designWrite)).toMatchObject({ ok: true, id: 51, kind: "design-lesson" });
+      expect(observed).toEqual({
+        method: "remember",
+        params: {
+          room: "example",
+          kind: "design-lesson",
+          title: "Keep interaction floors explicit",
+          body: "Every component contract names its keyboard and contrast floor.",
+          shape: "component-contract",
+          voice: "system-craft",
+          register: ["general"],
+          scope: null,
+          project: null,
+          proofPattern: "Exercise keyboard interaction and contrast checks.",
+          triggerContext: "Before adding a component variant.",
+          exampleText: "A menu opens with Enter and closes with Escape.",
+          tags: ["a11y", "components"],
+          backup: false,
+        },
+      });
+    } finally {
+      RustJsonlTransport.prototype.request = originalRequest;
+      closeRustRememberTransports();
+      restoreEnv(snapshot);
+    }
+
+    const designStage = await executeTool(
+      tools,
+      "update_lesson",
+      {
+        kind: "design-lesson",
+        id: "51",
+        expectedTitle: "Keep interaction floors explicit",
+        stage: "mix",
+      },
+      { cwd },
+    );
+    expect(designStage.isError).toBe(true);
+    expect(parseToolJson(designStage).error).toContain("field not allowed for design-lesson: stage");
   });
 
   test("remember validates continuation contracts before dispatch", async () => {

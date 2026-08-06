@@ -17,11 +17,13 @@ import {
   appendAnamnesisRep,
   catchBoat,
   deleteLesson,
+  runDesignDocs,
   runLessons,
   substrateHealth,
   memorySourcePath,
   updateLesson,
   writeAnamnesisDrawer,
+  writeDesignDoc,
   writeLessonStore,
   writeSessionMemory,
 } from "./substrate.ts";
@@ -56,6 +58,7 @@ import {
 
 const rustRememberTransports = new Map<string, RustJsonlTransport>();
 const LANE_STATUS_HEALTH_TIMEOUT_MS = 3_000;
+const DESIGN_DOCUMENT_TYPES = new Set(["token", "component", "contract", "guideline"]);
 
 const defaultGigaPromotionOperations = Object.freeze({
   requestGigaCandidateList,
@@ -266,6 +269,7 @@ async function writeRustLesson({ room, kind, title, body, fields, backup, signal
     register: Array.isArray(fields.register) ? fields.register : [],
     scope: fields.scope ?? null, project: fields.project ?? null,
     proofPattern: fields.proofPattern ?? null, triggerContext: fields.triggerContext ?? null,
+    exampleText: fields.exampleText ?? null,
     tags: Array.isArray(fields.tags) ? fields.tags : [], backup,
   };
   try {
@@ -496,8 +500,8 @@ export function registerSolarisaelTools(pi) {
     parameters: z.object({
       title: z.string().describe("Short title."),
       body: z.string().describe("Markdown body. In AKASHA this complete body is stored authoritatively in PostgreSQL; a source path cannot replace it. For memory: preserve the names, observable details, actions, boundaries, and meaning needed for future recognition. The body must stand alone; a transcript may be provenance but cannot carry the only substance. For lessons: the lesson text."),
-      kind: z.enum(["memory", "coding-lesson", "project-lesson", "writing-lesson", "audio-lesson"]).optional()
-        .describe("Destination store. memory (default): a thing that happened. coding-lesson: a reusable code rule with a proof pattern. project-lesson: a project-wide rule (requires 'project'). writing-lesson: a prose-taste rule (register, voice, wit mechanics). audio-lesson: an audio-pipeline rule."),
+      kind: z.enum(["memory", "coding-lesson", "project-lesson", "writing-lesson", "design-lesson", "audio-lesson"]).optional()
+        .describe("Destination store. memory (default): a thing that happened. coding-lesson: a reusable code rule with a proof pattern. project-lesson: a project-wide rule (requires 'project'). writing-lesson: a prose-taste rule (register, voice, wit mechanics). design-lesson: a reusable design-system rule — token governance, component contract, or accessibility floor. audio-lesson: an audio-pipeline rule."),
       room: z.enum(["house"]).optional()
         .describe("memory only: omit to write to this room. 'house' writes to the House commons — durable work any room can use. A sibling room is never a valid target."),
       threads: z.array(z.string()).optional().describe("memory only: thread keys, 'concept / variant / variant'."),
@@ -507,12 +511,13 @@ export function registerSolarisaelTools(pi) {
         previousMemoryId: z.string().regex(/^[1-9]\d*$/),
       })).optional().describe("memory only: predecessor edges, one per thread; thread must also appear in threads."),
       shape: z.string().optional().describe("lesson kinds: shape taxonomy value (e.g. process, naming, refusal)."),
-      voice: z.string().optional().describe("coding/writing lessons: voice (e.g. craft, room-style)."),
-      register: z.array(z.string()).optional().describe("writing-lesson: contexts where the rule applies (e.g. fiction, product-work)."),
+      voice: z.string().optional().describe("coding, writing, or design lessons: voice (e.g. craft, room-style)."),
+      register: z.array(z.string()).optional().describe("writing/design lessons: contexts where the rule applies (e.g. fiction, product-work)."),
       scope: z.string().optional().describe("coding-lesson: scope (house or a room name)."),
       project: z.string().optional().describe("project-lesson (required) or coding-lesson: project name."),
-      proofPattern: z.string().optional().describe("coding/project lessons: the proof pattern."),
+      proofPattern: z.string().optional().describe("coding, project, or design lessons: the proof pattern."),
       triggerContext: z.string().optional().describe("lesson kinds: when this lesson should fire."),
+      exampleText: z.string().optional().describe("writing/design lessons: example text."),
       tags: z.array(z.string()).optional().describe("lesson kinds: tags."),
     }),
     approval: "write",
@@ -525,7 +530,7 @@ export function registerSolarisaelTools(pi) {
       };
   
       if (kind === "memory") {
-        const lessonOnly = ["shape", "voice", "register", "scope", "project", "proofPattern", "triggerContext", "tags"].filter((key) => {
+        const lessonOnly = ["shape", "voice", "register", "scope", "project", "proofPattern", "triggerContext", "exampleText", "tags"].filter((key) => {
           const value = params[key];
           return Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "";
         });
@@ -606,14 +611,17 @@ export function registerSolarisaelTools(pi) {
       const fields = {
         shape: params.shape,
         voice: params.voice,
-        register: params.register,
+        register: kind === "design-lesson" && (!Array.isArray(params.register) || params.register.length === 0)
+          ? ["general"]
+          : params.register,
         scope: params.scope,
         project: params.project,
         proofPattern: params.proofPattern,
         triggerContext: params.triggerContext,
+        exampleText: params.exampleText,
         tags: params.tags,
       };
-      const built = buildStoreArgs(kind, store, fields);
+      const built = buildStoreArgs(kind, store, fields, { title: params.title, lesson: params.body });
       if (!built.ok) return refuse(built.error);
       const rustConfigured = Boolean(discoverRustExecutable());
       const rustFields = {
@@ -632,12 +640,12 @@ export function registerSolarisaelTools(pi) {
     name: "delete_lesson",
     label: "Athanor Delete Lesson (Destructive)",
     description: [
-      "Permanently delete exactly one coding or project lesson by numeric ID.",
+      "Permanently delete exactly one coding, project, writing, or design lesson by numeric ID.",
       "REQUIRES the exact current expected title; a mismatch or unknown ID refuses without deleting.",
       "This is destructive and requires write approval. Never use it for broad cleanup.",
     ].join("\n"),
     parameters: z.object({
-      kind: z.enum(["coding-lesson", "project-lesson"]).describe("Which allowlisted lesson table: coding-lesson or project-lesson."),
+      kind: z.enum(["coding-lesson", "project-lesson", "writing-lesson", "design-lesson"]).describe("Which allowlisted lesson type."),
       id: z.string().describe("Exact positive numeric lesson ID (digits only)."),
       expectedTitle: z.string().describe("Exact current title required as a deletion guard (must be non-empty)."),
     }),
@@ -663,12 +671,13 @@ export function registerSolarisaelTools(pi) {
     name: "update_lesson",
     label: "Athanor Update Lesson",
     description: [
-      "Update exactly one coding or project lesson while preserving its ID.",
+      "Update exactly one coding, project, writing, or design lesson while preserving its ID.",
       "REQUIRES the exact current expected title; a mismatch or unknown ID refuses without updating.",
+      "Fields are typed by lesson kind; cross-store fields refuse instead of being silently dropped.",
       "This is a guarded write and requires write approval.",
     ].join("\n"),
     parameters: z.object({
-      kind: z.enum(["coding-lesson", "project-lesson"]).describe("Which allowlisted lesson table."),
+      kind: z.enum(["coding-lesson", "project-lesson", "writing-lesson", "design-lesson"]).describe("Which allowlisted lesson type."),
       id: z.string().describe("Exact positive numeric lesson ID (digits only)."),
       expectedTitle: z.string().describe("Exact current title required as an update guard (must be non-empty)."),
       title: z.string().optional().describe("Replacement title."),
@@ -676,12 +685,15 @@ export function registerSolarisaelTools(pi) {
       shape: z.string().optional().describe("Lesson shape taxonomy value."),
       triggerContext: z.string().optional().describe("When the lesson should trigger."),
       tags: z.array(z.string()).optional().describe("Replacement lesson tags."),
-      voice: z.string().optional().describe("Coding lesson voice."),
+      voice: z.string().optional().describe("Coding, writing, or design lesson voice."),
       scope: z.string().optional().describe("Coding lesson scope."),
       project: z.string().optional().describe("Coding/project lesson project."),
-      proofPattern: z.string().optional().describe("Coding/project lesson proof pattern."),
-      negationOf: z.string().optional().describe("Coding lesson ID this lesson negates; omit to preserve."),
-      clearNegationOf: z.boolean().optional().describe("Clear the coding lesson's negation link; mutually exclusive with negationOf."),
+      proofPattern: z.string().optional().describe("Coding, project, or design lesson proof pattern."),
+      register: z.array(z.string()).optional().describe("Writing/design registers where this lesson applies."),
+      exampleText: z.string().optional().describe("Replacement writing/design example text."),
+      writers: z.array(z.string()).optional().describe("Writers associated with this writing lesson."),
+      negationOf: z.string().optional().describe("Coding or writing lesson ID this lesson negates; omit to preserve."),
+      clearNegationOf: z.boolean().optional().describe("Clear a coding or writing lesson's negation link; mutually exclusive with negationOf."),
     }),
     approval: "write",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -689,7 +701,18 @@ export function registerSolarisaelTools(pi) {
       if (typeof params.expectedTitle !== "string" || params.expectedTitle.length === 0) {
         return refuseToolResult("expectedTitle must be non-empty and match the current title exactly");
       }
-      const patchFields = ["title", "body", "shape", "triggerContext", "tags", "voice", "scope", "project", "proofPattern", "negationOf", "clearNegationOf"];
+      const patchFields = params.kind === "coding-lesson"
+        ? ["title", "body", "shape", "triggerContext", "tags", "voice", "scope", "project", "proofPattern", "negationOf", "clearNegationOf"]
+        : params.kind === "project-lesson"
+          ? ["title", "body", "shape", "triggerContext", "tags", "project", "proofPattern"]
+          : params.kind === "design-lesson"
+            ? ["title", "body", "shape", "triggerContext", "tags", "voice", "register", "proofPattern", "exampleText"]
+            : ["title", "body", "shape", "triggerContext", "tags", "voice", "register", "exampleText", "writers", "negationOf", "clearNegationOf"];
+      const allowedFields = new Set(["kind", "id", "expectedTitle", ...patchFields]);
+      const invalidField = Object.keys(params).find((key) =>
+        params[key] !== undefined && !allowedFields.has(key)
+      );
+      if (invalidField) return refuseToolResult(`field not allowed for ${params.kind}: ${invalidField}`);
       const patch = Object.fromEntries(patchFields
         .filter((key) => Object.prototype.hasOwnProperty.call(params, key) && params[key] !== undefined)
         .map((key) => [key, params[key]]));
@@ -699,9 +722,6 @@ export function registerSolarisaelTools(pi) {
       }
       delete patch.clearNegationOf;
       if (Object.keys(patch).length === 0) return refuseToolResult("at least one update field is required");
-      if (params.kind === "project-lesson" && (patch.voice !== undefined || patch.scope !== undefined || patch.negationOf !== undefined)) {
-        return refuseToolResult("project-lesson does not accept voice, scope, or negationOf");
-      }
       const { sharedRoot, effectiveRoomDir } = roomContext(ctx.cwd);
       const result = await updateLesson({
         sharedRoot,
@@ -782,10 +802,10 @@ export function registerSolarisaelTools(pi) {
     label: "Athanor Lessons",
     description: "Query the canonical typed lesson registry. Supply a type; add the filters relevant to that lesson family.",
     parameters: z.object({
-      type: z.enum(["coding", "project", "writing", "audio"]).describe("Lesson family."),
+      type: z.enum(["coding", "project", "writing", "design", "audio"]).describe("Lesson family."),
       shape: z.string().optional().describe("Shape vocabulary filter, such as process."),
       project: z.string().optional().describe("Required for project lessons; optional narrowing for coding lessons."),
-      register: z.string().optional().describe("Writing register filter."),
+      register: z.string().optional().describe("Writing or design register filter."),
       stage: z.string().optional().describe("Audio pipeline stage filter."),
       query: z.string().optional().describe("Full-text lesson query."),
       limit: z.number().default(12).describe("Maximum rows; integer from 1 through 50."),
@@ -804,6 +824,95 @@ export function registerSolarisaelTools(pi) {
         isError: !result.ok,
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         details: { room, type: params.type, ok: result.ok },
+      };
+    },
+  });
+
+  registerHouseTool(pi, {
+    name: "design_doc",
+    label: "Athanor Design Document",
+    description: "Reader of the House design-system catalogue.",
+    parameters: z.object({
+      system: z.string().describe("Required design-system key, such as solarisael or multistock."),
+      docType: z.enum(["token", "component", "contract", "guideline"]).optional().describe("Catalogue document type."),
+      name: z.string().optional().describe("Exact document name."),
+      group: z.string().optional().describe("Optional document group."),
+      query: z.string().optional().describe("Full-text query over name and contract prose."),
+      includeSuperseded: z.boolean().optional().describe("Include superseded historical rows."),
+      limit: z.number().default(12).describe("Maximum rows; integer from 1 through 50."),
+    }),
+    approval: "read",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (typeof params.system !== "string" || !params.system.trim()) {
+        return refuseToolResult("system is required");
+      }
+      if (params.docType !== undefined && !DESIGN_DOCUMENT_TYPES.has(params.docType)) {
+        return refuseToolResult("docType must be token, component, contract, or guideline");
+      }
+      if (!Number.isInteger(params.limit) || params.limit < 1 || params.limit > 50) {
+        return refuseToolResult("limit must be an integer from 1 through 50");
+      }
+      const { effectiveRoomDir } = roomContext(ctx.cwd);
+      const result = await runDesignDocs(effectiveRoomDir, params);
+      return {
+        isError: !result.ok,
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: { system: params.system, ok: result.ok },
+      };
+    },
+  });
+
+  registerHouseTool(pi, {
+    name: "design_doc_write",
+    label: "Athanor Design Document Write",
+    description: [
+      "Writer of the House design-system catalogue.",
+      "A write supersedes, never mutates; values and provenance are structured JSON.",
+    ].join("\n"),
+    parameters: z.object({
+      system: z.string().describe("Required design-system key, such as solarisael or multistock."),
+      docType: z.enum(["token", "component", "contract", "guideline"]).describe("Catalogue document type."),
+      name: z.string().describe("Required document identity name."),
+      group: z.string().optional().describe("Optional document group."),
+      values: z.object({}).optional().describe("Structured JSON design values."),
+      body: z.string().optional().describe("Contract prose; sent through stdin."),
+      provenance: z.object({}).optional().describe("Structured JSON evidence and extraction provenance."),
+      tags: z.array(z.string()).optional().describe("Document tags."),
+      supersedes: z.string().optional().describe("Positive numeric document ID to supersede."),
+      allowIdentityChange: z.boolean().optional().describe("Allow a superseded row to have a different identity."),
+    }),
+    approval: "write",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (typeof params.system !== "string" || !params.system.trim()) {
+        return refuseToolResult("system is required");
+      }
+      if (!DESIGN_DOCUMENT_TYPES.has(params.docType)) {
+        return refuseToolResult("docType must be token, component, contract, or guideline");
+      }
+      if (typeof params.name !== "string" || !params.name.trim()) {
+        return refuseToolResult("name is required");
+      }
+      if (params.supersedes !== undefined && !/^[1-9]\d*$/.test(String(params.supersedes))) {
+        return refuseToolResult("supersedes must be a positive numeric document ID");
+      }
+      const { effectiveRoomDir } = roomContext(ctx.cwd);
+      const result = await writeDesignDoc({
+        effectiveRoomDir,
+        system: params.system,
+        docType: params.docType,
+        name: params.name,
+        group: params.group,
+        values: params.values,
+        body: params.body,
+        provenance: params.provenance,
+        tags: params.tags,
+        supersedes: params.supersedes,
+        allowIdentityChange: params.allowIdentityChange,
+      });
+      return {
+        isError: !result.ok,
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        details: result,
       };
     },
   });

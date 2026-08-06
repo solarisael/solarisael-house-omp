@@ -53,6 +53,21 @@ export const REMEMBER_STORES = {
     },
     noBackup: true,
   },
+  "design-lesson": {
+    script: "record_design_lesson.py",
+    whenToUse: "a design-system taste rule: tokens, component contracts, layout, accessibility",
+    required: ["title", "lesson"],
+    argMap: {
+      voice: "--voice",
+      register: "--register",
+      shape: "--shape",
+      proofPattern: "--proof-pattern",
+      triggerContext: "--trigger-context",
+      exampleText: "--example-text",
+      tags: "--tag",
+    },
+    noBackup: true,
+  },
   "audio-lesson": {
     script: "record_audio_lesson.py",
     whenToUse: "an audio-pipeline rule (tools, stages, commands)",
@@ -69,13 +84,15 @@ export const REMEMBER_STORES = {
 // Build the kind-specific argv tail from tool params, refusing loudly:
 // a missing required field or a field the kind does not accept is an
 // error that names the accepted set, never a silent drop.
-export function buildStoreArgs(kind, store, fields) {
+export function buildStoreArgs(kind, store, fields, requiredValues = {}) {
   const provided = Object.entries(fields).filter(([, value]) =>
     Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "",
   );
 
   for (const name of store.required) {
-    if (!provided.some(([key]) => key === name)) {
+    const value = Object.prototype.hasOwnProperty.call(requiredValues, name) ? requiredValues[name] : fields[name];
+    const present = Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "";
+    if (!present) {
       return { ok: false, error: `kind '${kind}' requires field '${name}'` };
     }
   }

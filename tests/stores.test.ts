@@ -14,7 +14,9 @@ describe("remember store registry", () => {
       expect(typeof store.noBackup).toBe("boolean");
 
       for (const required of store.required) {
-        expect(Object.keys(store.argMap)).toContain(required);
+        if (!["title", "lesson"].includes(required)) {
+          expect(Object.keys(store.argMap)).toContain(required);
+        }
       }
 
       for (const [field, flag] of Object.entries(store.argMap)) {
@@ -22,6 +24,24 @@ describe("remember store registry", () => {
         expect(flag).toMatch(/^--[a-z][a-z-]*$/);
       }
     }
+  });
+
+  test("registers the design lesson fallback writer", () => {
+    expect(REMEMBER_STORES["design-lesson"]).toEqual({
+      script: "record_design_lesson.py",
+      whenToUse: "a design-system taste rule: tokens, component contracts, layout, accessibility",
+      required: ["title", "lesson"],
+      argMap: {
+        voice: "--voice",
+        register: "--register",
+        shape: "--shape",
+        proofPattern: "--proof-pattern",
+        triggerContext: "--trigger-context",
+        exampleText: "--example-text",
+        tags: "--tag",
+      },
+      noBackup: true,
+    });
   });
 });
 
@@ -59,6 +79,71 @@ describe("buildStoreArgs", () => {
     expect(result).toEqual({
       ok: true,
       args: ["--register", "fiction", "--register", "product-work"],
+    });
+  });
+
+  test("builds the design lesson argv with its complete accepted field set", () => {
+    const result = buildStoreArgs("design-lesson", REMEMBER_STORES["design-lesson"], {
+      voice: "system-craft",
+      register: ["product-work", "interface-copy"],
+      shape: "component-contract",
+      proofPattern: "Verify the contrast and interaction floor.",
+      triggerContext: "Before introducing a component variant.",
+      exampleText: "Buttons keep one primary action per surface.",
+      tags: ["tokens", "a11y"],
+    }, {
+      title: "Protect the contrast floor",
+      lesson: "Reusable design-system rule.",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      args: [
+        "--voice",
+        "system-craft",
+        "--register",
+        "product-work",
+        "--register",
+        "interface-copy",
+        "--shape",
+        "component-contract",
+        "--proof-pattern",
+        "Verify the contrast and interaction floor.",
+        "--trigger-context",
+        "Before introducing a component variant.",
+        "--example-text",
+        "Buttons keep one primary action per surface.",
+        "--tag",
+        "tokens",
+        "--tag",
+        "a11y",
+      ],
+    });
+  });
+
+  test("requires a title and lesson for design lessons", () => {
+    const result = buildStoreArgs("design-lesson", REMEMBER_STORES["design-lesson"], {}, {
+      title: "A real title",
+      lesson: "",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "kind 'design-lesson' requires field 'lesson'",
+    });
+  });
+
+  test("refuses unknown design lesson fields and names the accepted field set", () => {
+    const result = buildStoreArgs("design-lesson", REMEMBER_STORES["design-lesson"], {
+      stage: "mix",
+    }, {
+      title: "A real title",
+      lesson: "A real lesson.",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "kind 'design-lesson' does not accept field 'stage'; accepted: voice, register, shape, proofPattern, triggerContext, exampleText, tags",
     });
   });
 

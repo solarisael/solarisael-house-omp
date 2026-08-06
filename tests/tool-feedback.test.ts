@@ -47,6 +47,8 @@ const HOUSE_TOOL_NAMES = [
   "room_state",
   "set_room_state",
   "lessons",
+  "design_doc",
+  "design_doc_write",
   "sleep",
   "house_lane_status",
   "familiar_status",

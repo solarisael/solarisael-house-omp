@@ -14,6 +14,8 @@ export const HOUSE_CORE_ROOT = process.env.SOLARISAEL_HOUSE_CORE
     ? SOURCE_CORE_ROOT
     : PORTABLE_CORE_ROOT;
 export const LESSONS_SCRIPT = path.join(HOUSE_CORE_ROOT, "src", "lessons.py");
+export const DESIGN_DOCS_SCRIPT = path.join(HOUSE_CORE_ROOT, "src", "design-docs.py");
+export const DESIGN_DOC_WRITE_SCRIPT = path.join(HOUSE_CORE_ROOT, "src", "design-doc-write.py");
 export const OBSIDIAN_ROOT = process.env.SOLARISAEL_VAULT_ROOT
   ? path.resolve(process.env.SOLARISAEL_VAULT_ROOT)
   : path.join(os.homedir(), "Solarisael");
