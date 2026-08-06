@@ -18,8 +18,8 @@ start at the canonical Athanor docs:
 - a long-lived Rust transport for authoritative AKASHA memory operations
 - automatic and agent-initiated recall through the canonical Athanor contracts
 - a hygiene extension for keeping host-generated context out of user-authored continuity
-- state-conditioned Striatum activation that keeps three to six structurally
-  eligible coding or exact-project lessons warm and lets Nemotron rank relevance
+- state-conditioned Striatum activation that keeps up to six structurally eligible
+  coding or exact-project lessons warm and lets Nemotron rank relevance
   only after scope, project, type, stage, and register rails
 - a private-data-free portable bundle, fictional starter room, deterministic installer, and staged release updater
 - explicit Vault, AKASHA, and configured-but-degraded status for the optional [public substrate](https://github.com/solarisael/solarisael-house-substrate)

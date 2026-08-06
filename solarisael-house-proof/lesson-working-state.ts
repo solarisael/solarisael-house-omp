@@ -65,10 +65,10 @@ function promptTerms(prompt: string): string[] {
     .filter((term) => !STOP_WORDS.has(term.toLowerCase()))).slice(0, 12);
 }
 
-function declaredStages(prompt: string, explicit: string[] = []): string[] {
+function declaredStages(prompt: string, fallback: string[] = []): string[] {
   const matched = [...prompt.matchAll(/\b(?:phase|stage)\s*[:#-]?\s*([a-z0-9][a-z0-9_-]*)\b/gi)]
     .flatMap((match) => [match[1], `${match[0].split(/\s|:|#|-/)[0]}-${match[1]}`]);
-  return unique([...explicit, ...matched]);
+  return matched.length ? unique(matched) : unique(fallback);
 }
 
 function targetKind(target: string): string {

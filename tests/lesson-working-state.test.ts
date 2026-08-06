@@ -11,7 +11,7 @@ const project = { root: "C:/work/app", project: "app", source: "marker" as const
 const lessons = [1, 2, 3, 4, 5, 6, 7].map((id) => ({ id, semantic: { similarity: 1 - id / 100 } }));
 
 describe("Striatum lesson working state", () => {
-  test("keeps 3–6 bounded lessons across tiny wording changes", () => {
+  test("keeps up to six bounded lessons across tiny wording changes", () => {
     clearLessonWorkingSets();
     const initial = deriveLessonWorkingState({ room: "kintsu", project, toolName: "edit", target: "C:/work/app/src/a.ts" });
     const selected = updateLessonWorkingSet(initial, lessons);
@@ -22,13 +22,24 @@ describe("Striatum lesson working state", () => {
     expect(stable.lessons.map((lesson) => lesson.id)).toEqual(selected.lessons.map((lesson) => lesson.id));
   });
 
-  test("an explicit phase changes state while project identity stays exact", () => {
-    const initial = deriveLessonWorkingState({ room: "kintsu", project, toolName: "edit", target: "C:/work/app/src/a.ts" });
+  test("an explicit phase replaces stale stages while project identity stays exact", () => {
+    const initial = deriveLessonWorkingState({
+      room: "kintsu", project, toolName: "edit", target: "C:/work/app/src/a.ts", stages: ["implementation"],
+    });
     const phase = stateForLessonPrompt(initial, "Move into phase release now.");
     expect(phase.signature).not.toBe(initial.signature);
     expect(phase.project.project).toBe("app");
     expect(phase.stages).toContain("release");
+    expect(phase.stages).not.toContain("implementation");
     expect(updateLessonWorkingSet(phase, lessons).refreshed).toBeTrue();
+  });
+
+  test("retains the current stage when a prompt declares no transition", () => {
+    const initial = deriveLessonWorkingState({
+      room: "kintsu", project, toolName: "edit", target: "C:/work/app/src/a.ts", stages: ["implementation"],
+    });
+    const retained = stateForLessonPrompt(initial, "Keep adjusting the current module.");
+    expect(retained.stages).toEqual(["implementation"]);
   });
   test("refreshes when the project stays fixed but the work topic changes abruptly", () => {
     const initial = deriveLessonWorkingState({
