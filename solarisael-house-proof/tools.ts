@@ -263,6 +263,7 @@ async function writeRustLesson({ room, kind, title, body, fields, backup, signal
   if (!transport) return null;
   const params: Record<string, unknown> = {
     room, kind, title, body, shape: fields.shape ?? null, voice: fields.voice ?? null,
+    register: Array.isArray(fields.register) ? fields.register : [],
     scope: fields.scope ?? null, project: fields.project ?? null,
     proofPattern: fields.proofPattern ?? null, triggerContext: fields.triggerContext ?? null,
     tags: Array.isArray(fields.tags) ? fields.tags : [], backup,
@@ -507,6 +508,7 @@ export function registerSolarisaelTools(pi) {
       })).optional().describe("memory only: predecessor edges, one per thread; thread must also appear in threads."),
       shape: z.string().optional().describe("lesson kinds: shape taxonomy value (e.g. process, naming, refusal)."),
       voice: z.string().optional().describe("coding/writing lessons: voice (e.g. craft, room-style)."),
+      register: z.array(z.string()).optional().describe("writing-lesson: contexts where the rule applies (e.g. fiction, product-work)."),
       scope: z.string().optional().describe("coding-lesson: scope (house or a room name)."),
       project: z.string().optional().describe("project-lesson (required) or coding-lesson: project name."),
       proofPattern: z.string().optional().describe("coding/project lessons: the proof pattern."),
@@ -523,7 +525,7 @@ export function registerSolarisaelTools(pi) {
       };
   
       if (kind === "memory") {
-        const lessonOnly = ["shape", "voice", "scope", "project", "proofPattern", "triggerContext", "tags"].filter((key) => {
+        const lessonOnly = ["shape", "voice", "register", "scope", "project", "proofPattern", "triggerContext", "tags"].filter((key) => {
           const value = params[key];
           return Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "";
         });
@@ -604,6 +606,7 @@ export function registerSolarisaelTools(pi) {
       const fields = {
         shape: params.shape,
         voice: params.voice,
+        register: params.register,
         scope: params.scope,
         project: params.project,
         proofPattern: params.proofPattern,

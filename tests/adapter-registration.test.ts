@@ -244,6 +244,7 @@ describe("OMP adapter registration", () => {
           },
           shape: { type: "string", optional: true },
           voice: { type: "string", optional: true },
+          register: { type: "array", element: { type: "string" }, optional: true },
           scope: { type: "string", optional: true },
           project: { type: "string", optional: true },
           proofPattern: { type: "string", optional: true },

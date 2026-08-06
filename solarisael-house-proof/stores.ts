@@ -46,6 +46,7 @@ export const REMEMBER_STORES = {
     required: [],
     argMap: {
       voice: "--voice",
+      register: "--register",
       shape: "--shape",
       triggerContext: "--trigger-context",
       tags: "--tag",

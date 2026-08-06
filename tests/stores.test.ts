@@ -51,6 +51,17 @@ describe("buildStoreArgs", () => {
     });
   });
 
+  test("builds repeated register flags for writing lessons", () => {
+    const result = buildStoreArgs("writing-lesson", REMEMBER_STORES["writing-lesson"], {
+      register: ["fiction", "product-work"],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      args: ["--register", "fiction", "--register", "product-work"],
+    });
+  });
+
   test("refuses unknown fields and names the accepted field set", () => {
     const result = buildStoreArgs("project-lesson", REMEMBER_STORES["project-lesson"], {
       project: "solarisael-house",
