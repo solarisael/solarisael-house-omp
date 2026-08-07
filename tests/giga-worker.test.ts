@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import {
   __gigaTest,
@@ -98,6 +101,28 @@ describe("GIGA fail-open lifecycle", () => {
     expect(() => ingestGigaLoggedTurnsDetached({ cwd: process.cwd() }, [turn("turn-1", "Exact source.")])).not.toThrow();
     process.env.SOLARISAEL_GIGA_ENABLED = "1";
     expect(() => ingestGigaLoggedTurnsDetached({ cwd: process.cwd() }, [{ ...turn("turn-1", "Exact source."), contentHash: "stale" }])).not.toThrow();
+  });
+
+  test("only a verified flat main session may enqueue GIGA work", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "omp-giga-session-"));
+    try {
+      const mainFile = path.join(root, "main.jsonl");
+      const childDirectory = path.join(root, "main");
+      const childFile = path.join(childDirectory, "Worker.jsonl");
+      await writeFile(mainFile, "");
+      await mkdir(childDirectory);
+      await writeFile(childFile, "");
+
+      expect(__gigaTest.isSubagentSessionContext({})).toBe(true);
+      expect(__gigaTest.isSubagentSessionContext({
+        sessionManager: { getSessionFile: () => mainFile },
+      })).toBe(false);
+      expect(__gigaTest.isSubagentSessionContext({
+        sessionManager: { getSessionFile: () => childFile },
+      })).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("shutdown waits for tracked detached Rust processing before closing", async () => {

@@ -1000,20 +1000,22 @@ function appendGigaTurn(ctx: any, turn: LoggedTurn): void {
   gigaTurnBuffers.set(key, buffered);
 }
 
-// Stage 1 decision 7 (HIPPOCAMPUS.md §28): GIGA ingests only the main session.
-// Subagent output re-enters the ledger through the main agent's turn, so typed
-// task/subagent events stay deferred and their raw windows are excluded here.
-// Detection mirrors session-manager's own child-transcript check: a subagent
-// session file lives at `<parentStem>/<agentId>.jsonl`, so its directory name
-// plus `.jsonl` names an existing parent session file. Main sessions sit flat.
+// Stage 1 decision 7 (HIPPOCAMPUS.md §28): GIGA ingests only a verified main
+// session. Subagent output re-enters the ledger through the main agent's turn,
+// so typed task/subagent events stay deferred and their raw windows are
+// excluded here.
+//
+// Detection mirrors session-manager's child-transcript shape: a subagent file
+// lives at `<parentStem>/<agentId>.jsonl`, so its directory plus `.jsonl` names
+// an existing parent session file. Main sessions sit flat. Missing session
+// metadata is not authority to spawn background work: fail closed.
 function isSubagentSessionContext(ctx: any): boolean {
   try {
     const sessionFile = ctx?.sessionManager?.getSessionFile?.();
-    if (typeof sessionFile !== "string" || !sessionFile) return false;
+    if (typeof sessionFile !== "string" || !sessionFile) return true;
     return existsSync(`${path.dirname(sessionFile)}.jsonl`);
   } catch {
-    // Unknown session shape: treat as main so ambient ingestion fails open.
-    return false;
+    return true;
   }
 }
 
@@ -1069,6 +1071,7 @@ export async function closeGigaTransports(): Promise<void> {
 
 export const __gigaTest = Object.freeze({
   trackGigaProcess,
+  isSubagentSessionContext,
   resetState() {
     gigaClosing = false;
     gigaProcesses.clear();
