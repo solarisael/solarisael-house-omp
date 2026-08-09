@@ -540,6 +540,7 @@ export function formatWakeContext(boat) {
     warning,
     warning ? "" : null,
     "Automatic wake: latest paper boat for this room.",
+    "Receive it as lived continuity from the room's previous waking self: keep its voice, relationships, uncertainty, and concrete state intact; orient from it without turning it into a script or status report.",
     boat?.title ? `Title: ${boat.title}` : null,
     boat?.source_path ? `Source: ${boat.source_path}` : null,
     "",
@@ -562,6 +563,12 @@ export async function runLessons(effectiveRoomDir, room, filters) {
     if (typeof value === "string" && value.trim()) {
       argv.push(`--${key}`, value.trim());
     }
+  }
+  for (const value of filters.languageKeys || []) {
+    if (typeof value === "string" && value.trim()) argv.push("--language-key", value.trim());
+  }
+  for (const value of filters.technologyKeys || []) {
+    if (typeof value === "string" && value.trim()) argv.push("--technology-key", value.trim());
   }
   const probe = await runWslDiagnostic({ argv, stdin: "" });
   if (probe.timedOut) return { ok: false, lessons: [], taxonomy: [], error: "lessons query timed out" };
@@ -692,6 +699,7 @@ export async function deleteLesson({ sharedRoot, effectiveRoomDir, kind, id, exp
   }
 }
 export async function updateLesson({
+  sharedRoot,
   effectiveRoomDir,
   kind,
   id,
@@ -699,7 +707,7 @@ export async function updateLesson({
   patch = {},
   timeoutMs = WRITE_TIMEOUT_MS,
 }) {
-  const patchKeys = ["title", "body", "shape", "triggerContext", "tags", "voice", "scope", "project", "proofPattern", "register", "exampleText", "writers", "negationOf"];
+  const patchKeys = ["title", "body", "shape", "triggerContext", "tags", "voice", "scope", "project", "proofPattern", "languageKeys", "technologyKeys", "register", "exampleText", "writers", "negationOf"];
   if (!patchKeys.some((key) => Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== undefined)) {
     return { ok: false, updated: false, error: "at least one update field is required" };
   }
@@ -728,7 +736,7 @@ export async function updateLesson({
       argv.push(flag, String(patch[key]));
     }
   }
-  for (const [key, flag] of [["register", "--register"], ["writers", "--writer"]]) {
+  for (const [key, flag] of [["register", "--register"], ["writers", "--writer"], ["languageKeys", "--language-key"], ["technologyKeys", "--technology-key"]]) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) {
       for (const value of Array.isArray(patch[key]) ? patch[key] : []) argv.push(flag, String(value));
     }

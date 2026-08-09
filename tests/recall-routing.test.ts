@@ -1,8 +1,9 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { RustJsonlTransport, RustTransportError } from "../rust-transport.ts";
-import { closeRustRecallTransports, recallWithRouting } from "../solarisael-house-proof/recall.ts";
+import { closeRustRecallTransports, compactRecall, recallWithRouting } from "../solarisael-house-proof/recall.ts";
 
 const originalRust = process.env.SOLARISAEL_HOUSE_RUST;
 const originalRequest = RustJsonlTransport.prototype.request;
@@ -264,6 +265,52 @@ describe("Rust recall routing", () => {
     expect(malformed).toEqual({ ok: true, result: result("alpha") });
   });
 
+});
+
+test("routes an absent Rust substrate through attributed Vault file retrieval", async () => {
+  const previousRust = process.env.SOLARISAEL_HOUSE_RUST;
+  const previousAuto = process.env.SOLARISAEL_HOUSE_RUST_AUTO;
+  const root = await mkdtemp(path.join(os.tmpdir(), "omp-vault-routing-"));
+  const room = path.join(root, "vault-room");
+  await mkdir(room);
+  await writeFile(path.join(room, ".solarisael-room.json"), JSON.stringify({ version: 1, room: "vault-room" }));
+  await writeFile(path.join(room, "knowledge.md"), "# Furnace\nThe local retrieval receipt is VAULT-ROUTE-91.");
+  delete process.env.SOLARISAEL_HOUSE_RUST;
+  delete process.env.SOLARISAEL_HOUSE_RUST_AUTO;
+  closeRustRecallTransports();
+  try {
+    const routed = await recallWithRouting(room, "vault-room", "VAULT-ROUTE-91");
+    expect(routed).toMatchObject({
+      ok: true,
+      result: { ok: true, source: "vault-files", found: true },
+    });
+    const candidate = (routed as any).result.retrievalCandidates[0];
+    expect(candidate).toMatchObject({
+      source_path: path.join(room, "knowledge.md").replaceAll("\\", "/"),
+      heading_path: "Furnace",
+    });
+    expect(candidate.reasons).toEqual(expect.arrayContaining([expect.stringContaining("exact content fields")]));
+    expect(compactRecall((routed as any).result, { includeTaxonomy: true })).toMatchObject({
+      source: "vault-files",
+      vault: {
+        authority: "vault-files",
+        roots: [room.replaceAll("\\", "/")],
+        scannedFiles: 2,
+        indexedDocuments: 3,
+      },
+      retrievalCandidates: [{
+        source_path: path.join(room, "knowledge.md").replaceAll("\\", "/"),
+        reasons: expect.arrayContaining([expect.stringContaining("exact content fields")]),
+      }],
+      taxonomy: { fileTypes: ["markdown", "json", "jsonl", "text"] },
+    });
+  } finally {
+    if (previousRust === undefined) delete process.env.SOLARISAEL_HOUSE_RUST;
+    else process.env.SOLARISAEL_HOUSE_RUST = previousRust;
+    if (previousAuto === undefined) delete process.env.SOLARISAEL_HOUSE_RUST_AUTO;
+    else process.env.SOLARISAEL_HOUSE_RUST_AUTO = previousAuto;
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("manual and automatic consumers use the single routing seam", async () => {

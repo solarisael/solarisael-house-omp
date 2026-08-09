@@ -3,6 +3,7 @@ import { describe, expect, test, afterEach } from "bun:test";
 import solarisaelHouseProof from "../index.ts";
 type CapturedTool = {
   name: string;
+  description?: string;
   parameters: Schema;
   approval?: string;
   execute?: (...args: unknown[]) => Promise<{ content?: Array<{ text: string }>; details?: unknown }>;
@@ -10,6 +11,7 @@ type CapturedTool = {
 
 type Schema = {
   kind: "string" | "boolean" | "number" | "enum" | "literal" | "object" | "array" | "discriminatedUnion";
+  description?: string;
   isOptional?: boolean;
   pattern?: string;
   values?: string[];
@@ -36,7 +38,8 @@ function makeSchema(kind: Schema["kind"], fields: Partial<Schema> = {}): Schema 
   return {
     kind,
     ...fields,
-    describe(_description: string) {
+    describe(description: string) {
+      this.description = description;
       return this;
     },
     regex(pattern: RegExp) {
@@ -206,6 +209,18 @@ describe("OMP adapter registration", () => {
       giga_promote_project_lesson: { approval: "write" },
     });
   });
+
+  test("teaches the humane continuity register at every memory boundary", () => {
+    const tools = toolMap(registerAdapter().tools);
+
+    expect(tools.recall.description).toContain("recognition across time, not dossier lookup");
+    expect(tools.recall.parameters.shape?.query.description).toContain("room's own vocabulary");
+    expect(tools.remember.description).toContain("care for a future self, not filing a case report");
+    expect(tools.remember.parameters.shape?.body.description).toContain("active room's natural voice");
+    expect(tools.wake.description).toContain("letter from the room's previous waking self");
+    expect(tools.sleep.description).toContain("embodied continuity across sleep");
+    expect(tools.sleep.parameters.shape?.body.description).toContain("room's relationship register");
+  });
  
 
 
@@ -254,6 +269,8 @@ describe("OMP adapter registration", () => {
           proofPattern: { type: "string", optional: true },
           triggerContext: { type: "string", optional: true },
           exampleText: { type: "string", optional: true },
+          languageKeys: { type: "array", element: { type: "string" }, optional: true },
+          technologyKeys: { type: "array", element: { type: "string" }, optional: true },
           tags: { type: "array", element: { type: "string" }, optional: true },
         },
       },
@@ -280,6 +297,8 @@ describe("OMP adapter registration", () => {
           scope: { type: "string", optional: true },
           project: { type: "string", optional: true },
           proofPattern: { type: "string", optional: true },
+          languageKeys: { type: "array", element: { type: "string" }, optional: true },
+          technologyKeys: { type: "array", element: { type: "string" }, optional: true },
           register: { type: "array", element: { type: "string" }, optional: true },
           exampleText: { type: "string", optional: true },
           writers: { type: "array", element: { type: "string" }, optional: true },
@@ -370,6 +389,8 @@ describe("OMP adapter registration", () => {
           shape: { type: "string", optional: true },
           proof_pattern: { type: "string", optional: true },
           trigger_context: { type: "string", optional: true },
+          language_keys: { type: "array", element: { type: "string" }, optional: true },
+          technology_keys: { type: "array", element: { type: "string" }, optional: true },
           tags: { type: "array", element: { type: "string" }, optional: true },
         },
       },
@@ -381,6 +402,8 @@ describe("OMP adapter registration", () => {
           body: { type: "string" },
           proof_pattern: { type: "string", optional: true },
           trigger_context: { type: "string", optional: true },
+          language_keys: { type: "array", element: { type: "string" }, optional: true },
+          technology_keys: { type: "array", element: { type: "string" }, optional: true },
           tags: { type: "array", element: { type: "string" }, optional: true },
           publication_approved: { type: "boolean" },
         },
@@ -401,6 +424,8 @@ describe("OMP adapter registration", () => {
           project: { type: "string", optional: true },
           register: { type: "string", optional: true },
           stage: { type: "string", optional: true },
+          languageKeys: { type: "array", element: { type: "string" }, optional: true },
+          technologyKeys: { type: "array", element: { type: "string" }, optional: true },
           query: { type: "string", optional: true },
           limit: { type: "number" },
         },

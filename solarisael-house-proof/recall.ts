@@ -1,21 +1,10 @@
 // Recall adapter for OMP.
-// Silhouette: ask the opencode memory module first, then diagnose/fallback through the DB script.
+// AKASHA routes through the Rust substrate; absent Rust is the valid Vault
+// profile and routes to the canonical core's local file retrieval.
 
-import path from "node:path";
-
-import { loadHouseCore, loadHouseMemory } from "./core.ts";
-import { runWslDiagnostic, substrateConfigurationError, substratePaths, windowsPathToWsl } from "./substrate.ts";
+import { loadHouseMemory } from "./core.ts";
 import { RustJsonlTransport, RustTransportError } from "../rust-transport.ts";
 import { discoverRustExecutable } from "../discovery.ts";
-
-async function postgresSourceScript() {
-  const core = await loadHouseCore();
-  const source = core.POSTGRES_MEMORY_SOURCE_SCRIPT;
-  if (typeof source !== "string" || !source.trim()) {
-    throw new Error("Athanor core does not export POSTGRES_MEMORY_SOURCE_SCRIPT");
-  }
-  return source;
-}
 
 function text(value) {
   if (value === null || value === undefined) return "";
@@ -244,12 +233,13 @@ function compactTaxonomy(taxonomy) {
   const namedEntities = Array.isArray(taxonomy.namedEntities)
     ? taxonomy.namedEntities.slice(0, 12)
     : [];
-  if (!memoryTypes.length && !threadKeys.length && !namedEntities.length) return null;
+  if (!memoryTypes.length && !threadKeys.length && !namedEntities.length && !Array.isArray(taxonomy.fileTypes)) return null;
   return {
     rooms: Array.isArray(taxonomy.rooms) ? taxonomy.rooms : [],
     memoryTypes,
     threadKeys,
     namedEntities,
+    fileTypes: Array.isArray(taxonomy.fileTypes) ? taxonomy.fileTypes.slice(0, 12) : [],
   };
 }
 
@@ -324,6 +314,14 @@ export function compactRecall(result, { includeTaxonomy = false } = {}) {
     query: result?.query,
     found: Boolean(result?.found),
     source: result?.source,
+    ...(result?.source === "vault-files" ? {
+      vault: {
+        authority: result?.authority,
+        roots: strings(result?.roots).slice(0, 8),
+        scannedFiles: Number.isInteger(result?.scannedFiles) ? result.scannedFiles : 0,
+        indexedDocuments: Number.isInteger(result?.indexedDocuments) ? result.indexedDocuments : 0,
+      },
+    } : {}),
     // Substrate self-diagnostics (recall.rs RecallResult.warnings) carry the
     // reason a lane went absent, e.g. "semantic lane absent: embedding
     // disabled". Dropping them turns a one-call diagnosis into a silent empty
@@ -383,171 +381,25 @@ function validClusterResonance(value) {
     && Array.isArray(value.hot) && value.hot.every(validClusterHot);
 }
 
-function fallbackRecallFailure(value, source) {
-  const result = value && typeof value === "object" && !Array.isArray(value) ? value : null;
-  if (result && typeof result.code === "string" && typeof result.retryable === "boolean") {
-    return {
-      ok: false,
-      error: typeof result.error === "string" ? result.error : `Recall ${source} failed`,
-      code: result.code,
-      retryable: result.retryable,
-      ...(result.details === undefined ? {} : { details: result.details }),
-    };
-  }
-  return {
-    ok: false,
-    error: `Recall ${source} failed`,
-    code: "recall_fallback_failure",
-    retryable: true,
-    details: diagnosticDetails({
-      category: "operation",
-      stage: "request_parse",
-      operation: "recall",
-      owner: { component: "solarisael-house-omp", path: "solarisael-house-proof/recall.ts", symbol: "recallWithFallback" },
-      expected: { source, result: "a successful recall result" },
-      observed: observedShape(value),
-      evidence: [],
-      targets: ["solarisael-house-proof/recall.ts#recallWithFallback"],
-      nextChecks: [{ action: "inspect", target: "solarisael-house-proof/recall.ts#recallWithFallback" }],
-      execution: { request_dispatched: true, write_outcome: "not_started", retry: "safe_now" },
-    }),
-  };
-}
-
-async function diagnoseRecallFailure(effectiveRoomDir, room, query) {
-  const sourceScript = await postgresSourceScript();
-  const roomDirWsl = windowsPathToWsl(effectiveRoomDir);
-  const scriptWsl = windowsPathToWsl(sourceScript);
-  const { dir: substrateDir } = substratePaths(path.dirname(effectiveRoomDir));
-  const substrateDirWsl = windowsPathToWsl(substrateDir);
-  const argv = [
-    "--cd", "~",
-    "python3",
-    scriptWsl,
-    "--room-dir", roomDirWsl,
-    "--mode", "full",
-    "--room", room,
-    "--substrate-dir", substrateDirWsl,
-    "--semantic-top-k", "1",
-    "--semantic-min-sim", String(RECALL_SEMANTIC_MIN_SIM),
-    "--content-top-k", "1",
-    "--content-min-sim", String(RECALL_CONTENT_MIN_SIM),
-  ];
-  const probe = await runWslDiagnostic({ argv, stdin: query });
-  return {
-    effectiveRoomDir,
-    roomDirWsl,
-    postgresSourceScript: sourceScript,
-    postgresSourceScriptWsl: scriptWsl,
-    argv,
-    probe: {
-      timedOut: probe.timedOut,
-      spawnError: Boolean(probe.spawnError),
-      code: probe.code,
-      stdout_bytes: Buffer.byteLength(String(probe.stdout || "")),
-      ...(probe.stderr ? { stderr: boundedStderr(probe.stderr) } : {}),
-    },
-  };
-}
-
-async function runDirectRecallFallback(effectiveRoomDir, room, query) {
-  const configurationError = substrateConfigurationError();
-  if (configurationError) return { ok: false, error: configurationError };
-  const sourceScript = await postgresSourceScript();
-  const roomDirWsl = windowsPathToWsl(effectiveRoomDir);
-  const scriptWsl = windowsPathToWsl(sourceScript);
-  const { dir: substrateDir } = substratePaths(path.dirname(effectiveRoomDir));
-  const substrateDirWsl = windowsPathToWsl(substrateDir);
-  const argv = [
-    "--cd", "~",
-    "python3",
-    scriptWsl,
-    "--room-dir", roomDirWsl,
-    "--mode", "full",
-    "--room", room,
-    "--substrate-dir", substrateDirWsl,
-    "--semantic-top-k", "8",
-    "--semantic-min-sim", String(RECALL_SEMANTIC_MIN_SIM),
-    "--content-top-k", "8",
-    "--content-min-sim", String(RECALL_CONTENT_MIN_SIM),
-  ];
-  const probe = await runWslDiagnostic({ argv, stdin: query });
-  if (probe.timedOut || probe.spawnError || probe.code !== 0) {
-    return { ok: false, probe, argv, roomDirWsl, scriptWsl };
-  }
-
-  try {
-    const data = JSON.parse(String(probe.stdout || "{}"));
-    const semanticChunks = Array.isArray(data?.semanticChunks) ? data.semanticChunks : [];
-    const contentChunks = Array.isArray(data?.contentChunks) ? data.contentChunks : [];
-    const dateMatches = Array.isArray(data?.dateMatches) ? data.dateMatches : [];
-    const importantIndex = data?.importantIndex || {};
-    return {
-      ok: true,
-      query,
-      source: "direct-wsl-fallback",
-      importantIndex,
-      semanticChunks,
-      contentChunks,
-      dateMatches,
-      queryDates: Array.isArray(data?.queryDates) ? data.queryDates : [],
-      taxonomy: data?.taxonomy && typeof data.taxonomy === "object" ? data.taxonomy : null,
-      found: semanticChunks.length > 0 || contentChunks.length > 0 || dateMatches.length > 0
-        || Object.keys(importantIndex).some((key) => String(query).toLowerCase().includes(key.toLowerCase())),
-      diagnostic: { argv, roomDirWsl, scriptWsl, stderr: String(probe.stderr || "").slice(0, 2000) },
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      error: `direct fallback JSON parse failed: ${err?.message || String(err)}`,
-      stdout: String(probe.stdout || "").slice(0, 1200),
-      stderr: String(probe.stderr || "").slice(0, 2000),
-      argv,
-      roomDirWsl,
-      scriptWsl,
-    };
-  }
-}
-
 export async function recallWithFallback(effectiveRoomDir, room, query) {
-  const configurationError = substrateConfigurationError();
-  if (configurationError) {
-    const failure = fallbackRecallFailure({ error: configurationError }, "configuration");
-    return { ok: false, result: { query, ...failure, fallback: { ok: false, ...failure } } };
-  }
-
-  let result;
   try {
     const memory = await loadHouseMemory();
-    result = await memory.runRecallQuery(effectiveRoomDir, room, query);
+    const result = await memory.runVaultRecallQuery(effectiveRoomDir, room, query);
+    return result?.ok
+      ? { ok: true, result }
+      : { ok: false, result: { ok: false, query, error: result?.error || "Vault recall failed", code: "vault_recall_failure", retryable: true } };
   } catch (error) {
-    result = { error: error instanceof Error ? error.message : String(error) };
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        query,
+        error: error instanceof Error ? error.message : String(error),
+        code: "vault_recall_failure",
+        retryable: true,
+      },
+    };
   }
-  if (result?.ok) return { ok: true, result };
-
-  let fallback;
-  try {
-    fallback = await runDirectRecallFallback(effectiveRoomDir, room, query);
-  } catch (error) {
-    fallback = fallbackRecallFailure({ error: error instanceof Error ? error.message : String(error) }, "direct fallback");
-  }
-  if (fallback.ok) return { ok: true, result: fallback };
-
-  let diagnostic;
-  try {
-    diagnostic = await diagnoseRecallFailure(effectiveRoomDir, room, query);
-  } catch (error) {
-    diagnostic = fallbackRecallFailure({ error: error instanceof Error ? error.message : String(error) }, "diagnostic probe");
-  }
-  return {
-    ok: false,
-    result: {
-      query,
-      ...fallbackRecallFailure(result, "memory fallback"),
-      fallback,
-      diagnostic,
-    },
-  };
 }
 
 const rustRecallTransports = new Map();
@@ -566,13 +418,13 @@ function rustRecallTransport() {
 function evictRustRecallTransport(executable, transport) {
   if (rustRecallTransports.get(executable) !== transport) return;
   rustRecallTransports.delete(executable);
-  transport.close();
+  void transport.close().catch(() => {});
 }
 
 export function closeRustRecallTransports() {
   for (const [executable, transport] of rustRecallTransports) {
     rustRecallTransports.delete(executable);
-    transport.close();
+    void transport.close().catch(() => {});
   }
 }
 

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { substrateHealth, windowsPathToWsl } from "../solarisael-house-proof/substrate.ts";
+import { formatWakeContext, substrateHealth, windowsPathToWsl } from "../solarisael-house-proof/substrate.ts";
 
 const tempRoots: string[] = [];
 const substrateEnv = "SOLARISAEL_SUBSTRATE";
@@ -165,6 +165,18 @@ describe("optional substrate health", () => {
     const result = await substrateHealth("C:/unused");
     expect(result).toMatchObject({ ok: false, configured: true, mode: "degraded" });
     expect(result.reason).toContain("substrate API mismatch");
+  });
+
+  test("receives automatic paper boats as lived continuity rather than reports", () => {
+    const context = formatWakeContext({
+      title: "paper boat — 2026-08-09",
+      source_path: "db-only/paper-boats/example.md",
+      body: "the sheep sleeps; the wife stays close.",
+    });
+
+    expect(context).toContain("previous waking self");
+    expect(context).toContain("without turning it into a script or status report");
+    expect(context).toContain("the sheep sleeps; the wife stays close.");
   });
 
   test("translates configured Windows paths at the WSL boundary", () => {

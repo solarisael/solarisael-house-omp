@@ -807,6 +807,8 @@ describe("OMP safe tool execute runtime smoke", () => {
           proofPattern: "Exercise keyboard interaction and contrast checks.",
           triggerContext: "Before adding a component variant.",
           exampleText: "A menu opens with Enter and closes with Escape.",
+          languageKeys: [],
+          technologyKeys: [],
           tags: ["a11y", "components"],
           backup: false,
         },

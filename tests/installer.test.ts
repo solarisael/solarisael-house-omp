@@ -28,13 +28,13 @@ async function fixture(
     await writeFile(path.join(tree, "solarisael-house-omp/package-manifest.json"), JSON.stringify({ schemaVersion: 2 }));
   }
   await writeFile(path.join(tree, "starter-room/example/.solarisael-room.json"), JSON.stringify({ version: 1, room: "example", trueName: "Mica", operator: "Example" })); await writeFile(path.join(tree, "starter-room/example/active_spirit.md"), "# Active Spirit: Mica\nAgent: Mica | Operator: Example\n# SPIRIT: Mica\n"); await writeFile(path.join(tree, "starter-room/example/AGENTS.md"), "@active_spirit.md\n@room_summary.md\n");
-  const zip = path.join(root, "bundle.zip"); const tar = spawn("tar", ["-a", "-c", "-f", zip, "-C", tree, "."], { windowsHide: true }); await new Promise<void>((resolve, reject) => { tar.on("error", reject); tar.on("exit", (c) => c === 0 ? resolve() : reject(new Error("tar failed"))); }); return { root, zip };
+  const zip = path.join(root, "bundle.zip"); const tar = spawn("tar", ["-a", "-c", "-f", zip, "-C", tree, "."], { windowsHide: true }); await new Promise<void>((resolve, reject) => { tar.on("error", reject); tar.on("close", (c) => c === 0 ? resolve() : reject(new Error("tar failed"))); }); return { root, zip };
 }
 afterEach(async () => { await Promise.all(roots.splice(0).map((x) => rm(x, { recursive: true, force: true }))); });
 
 describe.serial("installer", () => {
   test("rejects unsafe room and missing required bundle without mutation", async () => { const { root, zip } = await fixture(); const target = path.join(root, "new target"); const result = await run(["--bundle", zip, "--target", target, "--room", "../escape", "--mode", "base", "--dry-run"]); expect(result.code).not.toBe(0); expect(await stat(target).catch(() => null)).toBeNull(); });
-  test("dry-run validates a bundle while leaving target absent", async () => { const { root, zip } = await fixture(); const target = path.join(root, "target with spaces"); const result = await run(["--bundle", zip, "--target", target, "--room", "demo-room", "--mode", "base", "--dry-run"]); expect(result.code).toBe(0); expect(JSON.parse(result.stdout).dryRun).toBe(true); expect(await stat(target).catch(() => null)).toBeNull(); });
+  test("dry-run validates a bundle while leaving target absent", async () => { const { root, zip } = await fixture(); const target = path.join(root, "target with spaces"); const result = await run(["--bundle", zip, "--target", target, "--room", "demo-room", "--mode", "base", "--dry-run"]); expect(result.code, JSON.stringify(result)).toBe(0); expect(JSON.parse(result.stdout).dryRun).toBe(true); expect(await stat(target).catch(() => null)).toBeNull(); });
   test("accepts the supported harness once and reports the selected catalog entry", async () => {
     const { root, zip } = await fixture();
     const result = await run(["--bundle", zip, "--target", path.join(root, "target"), "--room", "demo", "--mode", "base", "--harness", "omp", "--harness", "omp", "--dry-run"]);
@@ -62,7 +62,7 @@ describe.serial("installer", () => {
     const { root, zip } = await fixture(); const target = path.join(root, "install"); const config = path.join(root, "omp-config.yml");
     await writeFile(config, "model: user-choice\nextensions:\n  - keep-extension.ts\n");
     const result = await run(["--bundle", zip, "--target", target, "--room", "demo", "--mode", "base", "--config", config]);
-    expect(result.code).toBe(0);
+    expect(result.code, JSON.stringify(result)).toBe(0);
     const written = await readFile(config, "utf8");
     expect(written).toContain("model: user-choice"); expect(written).toContain("keep-extension.ts");
     expect(written).toContain(path.join(await realpath(target), "solarisael-house-omp", "index.ts").replaceAll("\\", "/"));
@@ -97,7 +97,7 @@ describe.serial("installer", () => {
     const { root, zip } = await fixture(); const target = path.join(root, "target"); const config = path.join(root, "config.yml");
     await writeFile(config, "extensions:\n  - keep.ts\n");
     const result = await run(["--bundle", zip, "--target", target, "--room", "demo", "--mode", "base", "--config", config]);
-    expect(result.code).toBe(0); expect(JSON.parse(result.stdout).ok).toBe(true);
+    expect(result.code, JSON.stringify(result)).toBe(0); expect(JSON.parse(result.stdout).ok).toBe(true);
   });
   test("installer source compiles for the current platform", async () => { const result = await new Promise<{ code: number }>((resolve, reject) => { const child = spawn("bun", ["build", "--compile", installer, "--outfile", path.join(os.tmpdir(), `house-installer-${Date.now()}.exe`)], { windowsHide: true }); child.on("error", reject); child.on("exit", (code) => resolve({ code: code ?? -1 })); }); expect(result.code).toBe(0); });
 });

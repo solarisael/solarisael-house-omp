@@ -42,7 +42,7 @@ describe("Rust JSONL transport", () => {
   test("returns successful result", async () => withFixture("success", async (file) => {
     const client = transport(file, "success");
     await expect(client.request("remember", { value: "ok" })).resolves.toEqual({ echoed: "ok" });
-    client.close();
+    await client.close();
   }));
 
   test("propagates structured errors, bounded stderr, and compatibility fields", async () => withFixture("error", async (file) => {
@@ -63,7 +63,7 @@ describe("Rust JSONL transport", () => {
     expect(error.stderr).toBe("diagnost");
     expect(error.details.observed.request).toEqual({ id: "1", method: "remember", dispatched: true });
     expect(error instanceof RustTransportError).toBe(true);
-    client.close();
+    await client.close();
   }));
 
   test("rejects malformed output and all pending calls", async () => withFixture("malformed", async (file) => {
@@ -86,7 +86,7 @@ describe("Rust JSONL transport", () => {
     circular.self = circular;
     await expect(client.request("remember", circular)).rejects.toThrow();
     await expect(first).resolves.toEqual("ok");
-    client.close();
+    await client.close();
   }));
 
   test("bounds oversized output without exposing its content", async () => withFixture("oversized", async (file) => {
@@ -111,7 +111,7 @@ describe("Rust JSONL transport", () => {
     await expect(client.request("remember", {}, { timeoutMs: -1 })).rejects.toThrow("timeoutMs");
     await expect(client.request("remember", {}, { timeoutMs: Number.MAX_SAFE_INTEGER })).rejects.toThrow("timeoutMs");
     await expect(client.request("remember", { value: "still-works" })).resolves.toEqual({ echoed: "still-works" });
-    client.close();
+    await client.close();
   }));
 
   test("pre-aborted request with timeout does not spawn or poison the transport", async () => withFixture("success", async (file) => {
@@ -121,7 +121,7 @@ describe("Rust JSONL transport", () => {
 
     await expect(client.request("remember", {}, { signal: controller.signal, timeoutMs: 2_147_483_647 })).rejects.toThrow("cancelled");
     await expect(client.request("remember", { value: "still-works" })).resolves.toEqual({ echoed: "still-works" });
-    client.close();
+    await client.close();
   }));
 
   test("definitive requests ignore post-dispatch abort but honor pre-abort", async () => withFixture("delayed", async (file) => {
@@ -159,7 +159,7 @@ describe("Rust JSONL transport", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     const records = await Bun.file(recordFile).exists() ? await Bun.file(recordFile).text() : "";
     expect(records).not.toContain("not-sent");
-    client.close();
+    await client.close();
     await rm(recordFile, { force: true });
   }));
 
@@ -206,7 +206,7 @@ describe("Rust JSONL transport", () => {
     const requests = Array.from({ length: 1025 }, (_, index) => client.request("remember", { value: index, delay: 1000 }));
     const outcomes = await Promise.allSettled(requests);
     expect(outcomes.some((outcome) => outcome.status === "rejected" && String((outcome as PromiseRejectedResult).reason.message).includes("limit"))).toBe(true);
-    client.close();
+    await client.close();
   }));
 
   test("pre-dispatch cancellation stays usable while timeout poisons the transport", async () => withFixture("success", async (file) => {
@@ -216,11 +216,12 @@ describe("Rust JSONL transport", () => {
 
     await expect(client.request("remember", {}, { signal: controller.signal })).rejects.toThrow("cancelled");
     await expect(client.request("remember", { value: "still-works" })).resolves.toEqual({ echoed: "still-works" });
-    client.close();
+    await client.close();
 
     const timeoutClient = transport(file, "success");
     await expect(timeoutClient.request("remember", {}, { timeoutMs: 1 })).rejects.toThrow("timed out");
     await expect(timeoutClient.request("remember", {})).rejects.toThrow("timed out");
+    await timeoutClient.close();
   }));
 
   test("marks post-dispatch cancellation as safely retryable", async () => withFixture("delayed", async (file) => {
@@ -242,6 +243,7 @@ describe("Rust JSONL transport", () => {
         execution: { request_dispatched: true, write_outcome: "unknown", retry: "safe_now" },
       },
     });
+    await client.close();
   }));
 
   test("correlates concurrent out-of-order responses and rejects duplicates", async () => withFixture("out-of-order", async (file) => {
@@ -249,7 +251,7 @@ describe("Rust JSONL transport", () => {
     const first = client.request("remember", { value: "slow", delay: 25 });
     const second = client.request("remember", { value: "fast", delay: 1 });
     await expect(Promise.all([first, second])).resolves.toEqual(["slow", "fast"]);
-    client.close();
+    await client.close();
   }));
 
   test("reports child exit code and bounded, redacted stderr evidence", async () => withFixture("exit-with-stderr", async (file) => {
@@ -315,7 +317,81 @@ describe("Rust JSONL transport", () => {
     expect(outcomes[0]).toMatchObject({ status: "fulfilled", value: true });
     expect(outcomes[1]).toMatchObject({ status: "rejected" });
     expect((outcomes[1] as PromiseRejectedResult).reason.message).toContain("unknown or duplicate");
+    await client.close();
   }));
+  test("close is idempotent and waits for observed child exit", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      pid: undefined,
+      kill: () => true,
+    });
+    const client = new RustJsonlTransport({
+      executable: "synthetic-rust-worker",
+      shutdownGraceMs: 50,
+      shutdownTimeoutMs: 100,
+      spawnProcess: (() => {
+        queueMicrotask(() => child.emit("spawn"));
+        return child;
+      }) as any,
+    });
+    const request = client.request("remember", {}).catch(() => undefined);
+    const closing = client.close();
+    expect(client.close()).toBe(closing);
+    let settled = false;
+    void closing.finally(() => { settled = true; });
+    await Bun.sleep(5);
+    expect(settled).toBe(false);
+    child.emit("close", 0, null);
+    await expect(closing).resolves.toBeUndefined();
+    await request;
+  });
+
+  test("close force-kills a stubborn child after the grace period", async () => {
+    const signals: string[] = [];
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      pid: undefined,
+      kill: (signal: string) => {
+        signals.push(signal);
+        queueMicrotask(() => child.emit("close", null, signal));
+        return true;
+      },
+    });
+    const client = new RustJsonlTransport({
+      executable: "synthetic-rust-worker",
+      shutdownGraceMs: 1,
+      shutdownTimeoutMs: 100,
+      spawnProcess: (() => child) as any,
+    });
+    const request = client.request("remember", {}).catch(() => undefined);
+    await expect(client.close()).resolves.toBeUndefined();
+    expect(signals).toEqual(["SIGKILL"]);
+    await request;
+  });
+
+  test("close rejects when force-kill produces no exit receipt", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      pid: undefined,
+      kill: () => true,
+    });
+    const client = new RustJsonlTransport({
+      executable: "synthetic-rust-worker",
+      shutdownGraceMs: 1,
+      shutdownTimeoutMs: 10,
+      spawnProcess: (() => child) as any,
+    });
+    const request = client.request("remember", {}).catch(() => undefined);
+    await expect(client.close()).rejects.toThrow("shutdown deadline");
+    await request;
+  });
+
 
   test("preserves reported child termination signals", async () => {
     const child = Object.assign(new EventEmitter(), {

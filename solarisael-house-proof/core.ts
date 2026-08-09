@@ -19,6 +19,7 @@ export async function loadHouseCore() {
   }
   for (const name of [
     "runRecallQuery",
+    "runVaultRecallQuery",
     "runAnamnesisQuery",
     "logUserTurn",
     "logAssistantTurn",
@@ -37,6 +38,7 @@ export async function loadHouseMemory() {
   const core = await loadHouseCore();
   return {
     runRecallQuery: core.runRecallQuery,
+    runVaultRecallQuery: core.runVaultRecallQuery,
     runAnamnesisQuery: core.runAnamnesisQuery,
   };
 }

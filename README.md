@@ -14,9 +14,10 @@ start at the canonical Athanor docs:
 
 - OMP lifecycle hooks for room context and end-of-session continuity
 - Athanor tools for room state, memory, recall, lessons, paper boats, and routing
+- native Vault recall over configured Markdown, JSON, JSONL, and text roots,
+  with exact-content and field-aware BM25F lanes plus attributed excerpts
 - room-local conversation logging and compact live context
 - a long-lived Rust transport for authoritative AKASHA memory operations
-- automatic and agent-initiated recall through the canonical Athanor contracts
 - a hygiene extension for keeping host-generated context out of user-authored continuity
 - state-conditioned Striatum activation that keeps up to six structurally eligible
   coding or exact-project lessons warm and lets Nemotron rank relevance
@@ -26,7 +27,7 @@ start at the canonical Athanor docs:
 
 The adapter stays TypeScript for OMP lifecycle integration, room discovery, context shaping, packaging, and installation. Rust owns shared contracts and the authoritative AKASHA process. Rust-first, because the boundary is real.
 
-The adapter fails open: an absent substrate is valid Vault mode, while a configured but unhealthy database, embedder, or Rust executable is reported as degraded rather than mistaken for healthy AKASHA.
+The adapter fails open: an absent substrate is valid Vault mode and routes recall through the canonical core's local file search, while a configured but unhealthy database, embedder, or Rust executable is reported as degraded rather than mistaken for healthy AKASHA.
 
 ## Platform expectations
 

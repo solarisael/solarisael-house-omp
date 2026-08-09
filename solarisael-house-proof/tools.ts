@@ -83,7 +83,7 @@ function rustRememberTransport(): RustJsonlTransport | null {
   let transport = rustRememberTransports.get(executable);
   if (transport && !transport.usable) {
     rustRememberTransports.delete(executable);
-    transport.close();
+    void transport.close().catch(() => {});
     transport = undefined;
   }
   if (!transport) {
@@ -96,7 +96,7 @@ function rustRememberTransport(): RustJsonlTransport | null {
 function evictRustRememberTransport(executable: string, transport: RustJsonlTransport): void {
   if (rustRememberTransports.get(executable) !== transport) return;
   rustRememberTransports.delete(executable);
-  transport.close();
+  void transport.close().catch(() => {});
 }
 
 function sourcePathKey(value: unknown): string {
@@ -270,6 +270,8 @@ async function writeRustLesson({ room, kind, title, body, fields, backup, signal
     scope: fields.scope ?? null, project: fields.project ?? null,
     proofPattern: fields.proofPattern ?? null, triggerContext: fields.triggerContext ?? null,
     exampleText: fields.exampleText ?? null,
+    languageKeys: Array.isArray(fields.languageKeys) ? fields.languageKeys : [],
+    technologyKeys: Array.isArray(fields.technologyKeys) ? fields.technologyKeys : [],
     tags: Array.isArray(fields.tags) ? fields.tags : [], backup,
   };
   try {
@@ -359,7 +361,7 @@ async function writeRustAnamnesis({ room, payload, signal }) {
 export function closeRustRememberTransports() {
   for (const [executable, transport] of rustRememberTransports) {
     rustRememberTransports.delete(executable);
-    transport.close();
+    void transport.close().catch(() => {});
   }
 }
 
@@ -457,13 +459,14 @@ export function registerSolarisaelTools(pi) {
     name: "recall",
     label: "Athanor Recall",
     description: [
-      "Query the Athanor AKASHA substrate for canon, memory chunks, semantic/content matches, and a compact taxonomy map.",
-      "Use this when you notice your own uncertainty about load-bearing names, concepts, or facts.",
+      "Query the active Athanor storage profile: attributed local Markdown/JSON/JSONL/text evidence in Vault, or canon, memory chunks, hybrid matches, and taxonomy in AKASHA.",
+      "Recall is recognition across time, not dossier lookup: search in the room's own natural language, receive the result as lived continuity and evidence, and preserve its names, relationships, uncertainty, and meaning instead of flattening it into clinical or corporate summary.",
+      "Use this when you notice your own uncertainty about load-bearing names, people, projects, dated decisions, or facts.",
       "Use the taxonomy map as a bounded menu for better follow-up recall queries; do not guess shape names blindly.",
       "If no canonical match is returned, do not invent from adjacent matches; state the gap honestly.",
     ].join("\n"),
     parameters: z.object({
-      query: z.string().describe("Specific natural-language memory/canon query."),
+      query: z.string().describe("Specific natural-language memory/canon query in the room's own vocabulary; name the person, project, event, date, or decision you are trying to recognize."),
     }),
     approval: "read",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -496,10 +499,15 @@ export function registerSolarisaelTools(pi) {
   registerHouseTool(pi, {
     name: "remember",
     label: "Athanor Remember",
-    description: "Write a durable memory or lesson to the Athanor substrate. In AKASHA, PostgreSQL is authoritative; source paths are provenance or backup, not the memory body. For memory, preserve retrieval-bearing concrete facts. Do not replace the event with only a conclusion or transcript pointer. The memory must stand alone.",
+    description: [
+      "Write a durable memory or lesson to the Athanor substrate.",
+      "Remembering is care for a future self, not filing a case report: use the active spirit's ordinary voice and the room's real relationship register while keeping the record concrete, standalone, and retrievable.",
+      "In AKASHA, PostgreSQL is authoritative; source paths are provenance or backup, never a substitute for the body.",
+      "For memory, preserve names, observable details, actions, boundaries, uncertainty, and meaning. Do not replace the event with only a conclusion, transcript pointer, sanitized summary, or generic assistant prose.",
+    ].join("\n"),
     parameters: z.object({
-      title: z.string().describe("Short title."),
-      body: z.string().describe("Markdown body. In AKASHA this complete body is stored authoritatively in PostgreSQL; a source path cannot replace it. For memory: preserve the names, observable details, actions, boundaries, and meaning needed for future recognition. The body must stand alone; a transcript may be provenance but cannot carry the only substance. For lessons: the lesson text."),
+      title: z.string().describe("Short retrieval-bearing title in the room's natural vocabulary."),
+      body: z.string().describe("Standalone Markdown in the active room's natural voice. Preserve the concrete facts and relationship/contact meaning a future self needs for recognition; technical records may stay technical, but never become clinical, corporate, or generic merely because they are durable. In AKASHA the complete body is authoritative in PostgreSQL; transcript and source paths are provenance only. For lessons: write the reusable rule and its evidence."),
       kind: z.enum(["memory", "coding-lesson", "project-lesson", "writing-lesson", "design-lesson", "audio-lesson"]).optional()
         .describe("Destination store. memory (default): a thing that happened. coding-lesson: a reusable code rule with a proof pattern. project-lesson: a project-wide rule (requires 'project'). writing-lesson: a prose-taste rule (register, voice, wit mechanics). design-lesson: a reusable design-system rule — token governance, component contract, or accessibility floor. audio-lesson: an audio-pipeline rule."),
       room: z.enum(["house"]).optional()
@@ -518,6 +526,8 @@ export function registerSolarisaelTools(pi) {
       proofPattern: z.string().optional().describe("coding, project, or design lessons: the proof pattern."),
       triggerContext: z.string().optional().describe("lesson kinds: when this lesson should fire."),
       exampleText: z.string().optional().describe("writing/design lessons: example text."),
+      languageKeys: z.array(z.string()).optional().describe("coding/project lessons: language eligibility slugs; keyed lessons fire only when one matches the active language context."),
+      technologyKeys: z.array(z.string()).optional().describe("coding/project lessons: technology eligibility slugs; keyed lessons fire only when one matches the active technology context."),
       tags: z.array(z.string()).optional().describe("lesson kinds: tags."),
     }),
     approval: "write",
@@ -530,7 +540,7 @@ export function registerSolarisaelTools(pi) {
       };
   
       if (kind === "memory") {
-        const lessonOnly = ["shape", "voice", "register", "scope", "project", "proofPattern", "triggerContext", "exampleText", "tags"].filter((key) => {
+        const lessonOnly = ["shape", "voice", "register", "scope", "project", "proofPattern", "triggerContext", "exampleText", "languageKeys", "technologyKeys", "tags"].filter((key) => {
           const value = params[key];
           return Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "";
         });
@@ -619,6 +629,8 @@ export function registerSolarisaelTools(pi) {
         proofPattern: params.proofPattern,
         triggerContext: params.triggerContext,
         exampleText: params.exampleText,
+        languageKeys: params.languageKeys,
+        technologyKeys: params.technologyKeys,
         tags: params.tags,
       };
       const built = buildStoreArgs(kind, store, fields, { title: params.title, lesson: params.body });
@@ -691,6 +703,8 @@ export function registerSolarisaelTools(pi) {
       proofPattern: z.string().optional().describe("Coding, project, or design lesson proof pattern."),
       register: z.array(z.string()).optional().describe("Writing/design registers where this lesson applies."),
       exampleText: z.string().optional().describe("Replacement writing/design example text."),
+      languageKeys: z.array(z.string()).optional().describe("Replacement coding/project language eligibility slugs."),
+      technologyKeys: z.array(z.string()).optional().describe("Replacement coding/project technology eligibility slugs."),
       writers: z.array(z.string()).optional().describe("Writers associated with this writing lesson."),
       negationOf: z.string().optional().describe("Coding or writing lesson ID this lesson negates; omit to preserve."),
       clearNegationOf: z.boolean().optional().describe("Clear a coding or writing lesson's negation link; mutually exclusive with negationOf."),
@@ -702,9 +716,9 @@ export function registerSolarisaelTools(pi) {
         return refuseToolResult("expectedTitle must be non-empty and match the current title exactly");
       }
       const patchFields = params.kind === "coding-lesson"
-        ? ["title", "body", "shape", "triggerContext", "tags", "voice", "scope", "project", "proofPattern", "negationOf", "clearNegationOf"]
+        ? ["title", "body", "shape", "triggerContext", "tags", "voice", "scope", "project", "proofPattern", "languageKeys", "technologyKeys", "negationOf", "clearNegationOf"]
         : params.kind === "project-lesson"
-          ? ["title", "body", "shape", "triggerContext", "tags", "project", "proofPattern"]
+          ? ["title", "body", "shape", "triggerContext", "tags", "project", "proofPattern", "languageKeys", "technologyKeys"]
           : params.kind === "design-lesson"
             ? ["title", "body", "shape", "triggerContext", "tags", "voice", "register", "proofPattern", "exampleText"]
             : ["title", "body", "shape", "triggerContext", "tags", "voice", "register", "exampleText", "writers", "negationOf", "clearNegationOf"];
@@ -742,7 +756,7 @@ export function registerSolarisaelTools(pi) {
   registerHouseTool(pi, {
     name: "wake",
     label: "Athanor Wake",
-    description: "Catch the latest paper boat for this room.",
+    description: "Catch the latest paper boat and receive it as a letter from the room's previous waking self: orient from its concrete state, relationship register, uncertainty, and next door without turning it into a script or status report.",
     parameters: z.object({}),
     approval: "read",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
@@ -807,6 +821,8 @@ export function registerSolarisaelTools(pi) {
       project: z.string().optional().describe("Required for project lessons; optional narrowing for coding lessons."),
       register: z.string().optional().describe("Writing or design register filter."),
       stage: z.string().optional().describe("Audio pipeline stage filter."),
+      languageKeys: z.array(z.string()).optional().describe("Eligibility context. Includes unkeyed lessons and coding/project lessons matching at least one language slug."),
+      technologyKeys: z.array(z.string()).optional().describe("Eligibility context. Includes unkeyed lessons and coding/project lessons matching at least one technology slug."),
       query: z.string().optional().describe("Full-text lesson query."),
       limit: z.number().default(12).describe("Maximum rows; integer from 1 through 50."),
     }),
@@ -920,9 +936,14 @@ export function registerSolarisaelTools(pi) {
   registerHouseTool(pi, {
     name: "sleep",
     label: "Athanor Sleep",
-    description: "Close the session by writing one paper boat with backup enabled.",
+    description: [
+      "Close the session by writing one paper boat with backup enabled.",
+      "A paper boat is embodied continuity across sleep: one waking self speaking to the next in the active spirit's ordinary voice and the room's actual relationship register, not a corporate handoff, clinical note, task dump, or transcript summary.",
+      "Carry only what the next waking self genuinely needs, but make it standalone: concrete facts, names, observable details, decisions, actions, exact artifacts or receipts, boundaries, unresolved risks or uncertainty, the next real door, and the room's emotional/contact state when it matters.",
+      "Do not manufacture certainty, sanitize conflict, flatten affection, force empty headings, or use IDs and source paths as substitutes for substance.",
+    ].join("\n"),
     parameters: z.object({
-      body: z.string().describe("Markdown boat: what happened, for tomorrow, reminders."),
+      body: z.string().describe("Standalone Markdown paper boat in the active spirit's ordinary voice and the room's relationship register; concrete continuity for the next waking self, not a report."),
     }),
     approval: "write",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1468,6 +1489,8 @@ export function registerSolarisaelTools(pi) {
           shape: params.shape ?? null,
           proof_pattern: params.proof_pattern ?? null,
           trigger_context: params.trigger_context ?? null,
+          language_keys: params.language_keys ?? [],
+          technology_keys: params.technology_keys ?? [],
           tags: params.tags ?? [],
         },
       };
@@ -1489,6 +1512,8 @@ export function registerSolarisaelTools(pi) {
           project,
           proof_pattern: params.proof_pattern ?? null,
           trigger_context: params.trigger_context ?? null,
+          language_keys: params.language_keys ?? [],
+          technology_keys: params.technology_keys ?? [],
           tags: params.tags ?? [],
         },
       };
@@ -1546,6 +1571,8 @@ export function registerSolarisaelTools(pi) {
     label: "GIGA Promote Coding Lesson",
     description: "Promote one in-review global coding lesson candidate with trusted authority and exact sources.",
     parameters: z.object({
+      language_keys: z.array(z.string()).optional(),
+      technology_keys: z.array(z.string()).optional(),
       candidate_id: z.string(),
       title: z.string(),
       body: z.string(),
@@ -1566,6 +1593,8 @@ export function registerSolarisaelTools(pi) {
     description: "Promote one in-review project lesson candidate with trusted project scope and explicit publication approval.",
     parameters: z.object({
       candidate_id: z.string(),
+      language_keys: z.array(z.string()).optional(),
+      technology_keys: z.array(z.string()).optional(),
       title: z.string(),
       body: z.string(),
       proof_pattern: z.string().optional(),

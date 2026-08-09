@@ -9,6 +9,8 @@ export interface RustTransportOptions {
   env?: NodeJS.ProcessEnv;
   stderrLimitBytes?: number;
   spawnProcess?: typeof spawn;
+  shutdownGraceMs?: number;
+  shutdownTimeoutMs?: number;
 }
 
 export interface RequestOptions {
@@ -370,6 +372,14 @@ export class RustJsonlTransport {
   private stderrBytes = 0;
   private stderrTruncated = false;
   private readonly stderrLimit: number;
+  private readonly shutdownGraceMs: number;
+  private readonly shutdownTimeoutMs: number;
+  private childClosed = false;
+  private closePromise?: Promise<void>;
+  private closeResolve?: () => void;
+  private closeReject?: (error: Error) => void;
+  private forceKillTimer?: ReturnType<typeof setTimeout>;
+  private shutdownTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private readonly options: RustTransportOptions) {
     const limit = options.stderrLimitBytes ?? 16 * 1024;
@@ -377,6 +387,11 @@ export class RustJsonlTransport {
       throw new Error("stderrLimitBytes must be a finite non-negative integer");
     }
     this.stderrLimit = limit;
+    this.shutdownGraceMs = this.shutdownDuration(options.shutdownGraceMs, 100, "shutdownGraceMs");
+    this.shutdownTimeoutMs = this.shutdownDuration(options.shutdownTimeoutMs, 5_000, "shutdownTimeoutMs");
+    if (this.shutdownTimeoutMs < this.shutdownGraceMs) {
+      throw new Error("shutdownTimeoutMs must be greater than or equal to shutdownGraceMs");
+    }
   }
 
   request(method: string, params: JsonObject, options: RequestOptions = {}): Promise<unknown> {
@@ -501,15 +516,24 @@ export class RustJsonlTransport {
     });
   }
 
-  close(): void {
-    this.invalidate(new Error("Rust transport closed"), true, {
-      code: "RUST_TRANSPORT_CLOSED",
-      message: "Rust transport closed",
-      retryable: true,
-      category: "transport",
-      stage: "shutdown",
-      observed: { closure: "requested" },
+  // Exit, not signal delivery, is the shutdown receipt. Project lesson #338.
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    const child = this.child;
+    if (!child || this.childClosed) {
+      this.invalidate(new Error("Rust transport closed"), false, this.closedFailure());
+      return (this.closePromise = Promise.resolve());
+    }
+    this.closePromise = new Promise<void>((resolve, reject) => {
+      this.closeResolve = resolve;
+      this.closeReject = reject;
     });
+    this.invalidate(new Error("Rust transport closed"), false, this.closedFailure());
+    this.terminateChild(child);
+    this.shutdownTimer = setTimeout(() => {
+      this.settleClose(new Error("Rust transport child did not exit before the shutdown deadline"));
+    }, this.shutdownTimeoutMs);
+    return this.closePromise;
   }
 
   get stderrDiagnostics(): string {
@@ -531,6 +555,7 @@ export class RustJsonlTransport {
       windowsHide: true,
     });
     this.child = child;
+    this.childClosed = false;
     child.once("spawn", () => { this.childStarted = true; });
     child.stderr.on("data", (chunk: Buffer | string) => this.collectStderr(Buffer.from(chunk)));
     child.stdin.on("error", (error) => this.invalidate(error, true, this.streamFailure(error, "request_write", "RUST_TRANSPORT_REQUEST_WRITE_FAILED", "Rust transport request write failed")));
@@ -539,7 +564,10 @@ export class RustJsonlTransport {
       this.invalidate(error, true, this.spawnFailure(error));
     });
     child.on("close", (code, signal) => {
-      if (this.child !== child || this.cleaned) return;
+      if (this.child !== child) return;
+      this.childClosed = true;
+      this.settleClose();
+      if (this.cleaned) return;
       this.invalidate(new Error(`Rust transport child exited (${signal ?? code ?? "unknown"})`), false, {
         code: "RUST_TRANSPORT_CHILD_EXITED",
         message: `Rust transport child exited (${signal ?? code ?? "unknown"})`,
@@ -752,16 +780,48 @@ export class RustJsonlTransport {
 
   private terminateChild(child: ChildProcessWithoutNullStreams): void {
     try { child.stdin.end(); } catch {}
-    const fallback = setTimeout(() => {
-      if (child.killed) return;
+    if (this.forceKillTimer) return;
+    this.forceKillTimer = setTimeout(() => {
+      if (this.childClosed || this.child !== child) return;
       if (process.platform === "win32" && child.pid) {
         const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
         killer.unref();
       } else {
-        child.kill();
+        child.kill("SIGKILL");
       }
-    }, 100);
-    fallback.unref();
+    }, this.shutdownGraceMs);
+  }
+
+  private settleClose(error?: Error): void {
+    if (this.forceKillTimer) clearTimeout(this.forceKillTimer);
+    if (this.shutdownTimer) clearTimeout(this.shutdownTimer);
+    this.forceKillTimer = undefined;
+    this.shutdownTimer = undefined;
+    const resolve = this.closeResolve;
+    const reject = this.closeReject;
+    this.closeResolve = undefined;
+    this.closeReject = undefined;
+    if (error) reject?.(error);
+    else resolve?.();
+  }
+
+  private shutdownDuration(value: number | undefined, fallback: number, field: string): number {
+    const duration = value ?? fallback;
+    if (!Number.isFinite(duration) || !Number.isInteger(duration) || duration < 0 || duration > MAX_TIMEOUT_MS) {
+      throw new Error(`${field} must be a non-negative integer no greater than ${MAX_TIMEOUT_MS}`);
+    }
+    return duration;
+  }
+
+  private closedFailure(): TransportFailure {
+    return {
+      code: "RUST_TRANSPORT_CLOSED",
+      message: "Rust transport closed",
+      retryable: true,
+      category: "transport",
+      stage: "shutdown",
+      observed: { closure: "requested" },
+    };
   }
 
   private invalidate(error: Error, kill = true, failure?: TransportFailure): void {
@@ -774,10 +834,6 @@ export class RustJsonlTransport {
     this.unusableFailure = diagnosticFailure;
     const child = this.child;
     if (child) {
-      child.stdout.removeAllListeners();
-      child.stderr.removeAllListeners();
-      child.stdin.removeAllListeners();
-      child.removeAllListeners();
       if (kill) this.terminateChild(child);
     }
     this.writeQueue.length = 0;

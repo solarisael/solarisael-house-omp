@@ -10,6 +10,8 @@ export type LessonContextInput = {
   terms?: string[];
   stages?: string[];
   registers?: string[];
+  languages?: string[];
+  technologies?: string[];
   limit?: number;
 };
 
@@ -23,6 +25,8 @@ export type LessonRecord = {
   project?: string;
   register?: string;
   stage?: string[];
+  language_keys?: string[];
+  technology_keys?: string[];
   match?: { score?: number; matched?: string[] };
   semantic?: { similarity: number };
 };
@@ -49,6 +53,8 @@ export async function runLessonContext(input: LessonContextInput): Promise<Lesso
   for (const term of input.terms || []) argv.push("--term", String(term));
   for (const stage of input.stages || []) argv.push("--stage", String(stage));
   for (const register of input.registers || []) argv.push("--register", String(register));
+  for (const language of input.languages || []) argv.push("--language", String(language));
+  for (const technology of input.technologies || []) argv.push("--technology", String(technology));
   argv.push("--limit", String(input.limit ?? 8));
   try {
     const probe = await runWslDiagnostic({ argv, stdin: "", timeoutMs: DIAGNOSTIC_TIMEOUT_MS });

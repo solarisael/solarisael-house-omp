@@ -106,13 +106,13 @@ function rustAnamnesisTransport(): RustJsonlTransport | null {
 function evictRustAnamnesisTransport(executable: string, transport: RustJsonlTransport): void {
   if (rustAnamnesisTransports.get(executable) !== transport) return;
   rustAnamnesisTransports.delete(executable);
-  transport.close();
+  void transport.close().catch(() => {});
 }
 
 export function closeRustAnamnesisTransports(): void {
   for (const [executable, transport] of rustAnamnesisTransports) {
     rustAnamnesisTransports.delete(executable);
-    transport.close();
+    void transport.close().catch(() => {});
   }
 }
 

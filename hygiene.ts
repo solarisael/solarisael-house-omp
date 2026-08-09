@@ -8,7 +8,7 @@
 //
 // Pure decision functions are exported for unit testing; the default factory
 // only wires them to pi events. No TTSR, no abort, no replaceMessages.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { resolveObservedProject, type ProjectContext, type ToolCallLike } from "./solarisael-house-proof/project-context.ts";
@@ -116,6 +116,28 @@ function termsFor(toolName: string): string[] {
   const name = toolName.replace(/[-_]+/g, " ").trim().toLowerCase();
   return [...new Set([name, ...name.split(/\s+/).filter((term) => term.length > 2)])].slice(0, 4);
 }
+const LANGUAGE_BY_EXTENSION: Record<string, string> = {
+  rs: "rust", gd: "gdscript", sql: "sql", ts: "typescript", tsx: "typescript",
+  js: "javascript", jsx: "javascript", py: "python",
+};
+
+export function eligibilityContext(project: ProjectContext, target: string): {
+  languages: string[]; technologies: string[];
+} {
+  const extension = /\.([a-z0-9]+)$/i.exec(target)?.[1]?.toLowerCase() || "";
+  const languages = LANGUAGE_BY_EXTENSION[extension] ? [LANGUAGE_BY_EXTENSION[extension]] : [];
+  const technologies = new Set<string>();
+  if (existsSync(path.join(project.root, "project.godot"))) technologies.add("godot");
+  const cargoManifest = path.join(project.root, "Cargo.toml");
+  if (existsSync(cargoManifest)) {
+    const cargo = readFileSync(cargoManifest, "utf8");
+    if (/\b(?:sqlx|tokio-postgres|postgres)\b[\s\S]{0,240}\bpostgres/i.test(cargo)
+        || /\b(?:tokio-postgres|postgres)\s*=/i.test(cargo)) {
+      technologies.add("postgresql");
+    }
+  }
+  return { languages, technologies: [...technologies].sort() };
+}
 
 function lessonReminder(project: ProjectContext, lessons: LessonContext): { type: "text"; text: string } {
   const compact = (value: unknown[]) => JSON.stringify(value.slice(0, 4));
@@ -148,7 +170,8 @@ export default function solarisaelHygiene(pi, dependencies: HygieneDependencies 
     rememberActiveLessonState(deriveLessonWorkingState({
       room: roomContext(ctx?.cwd).room, project, toolName: call.name, target,
     }));
-    const key = `${project.root}\0${project.project}`;
+    const eligibility = eligibilityContext(project, target);
+    const key = `${project.root}\0${project.project}\0${eligibility.languages.join(",")}\0${eligibility.technologies.join(",")}`;
     const fresh = !queried.has(key);
     if (fresh) {
       queried.add(key);
@@ -158,6 +181,8 @@ export default function solarisaelHygiene(pi, dependencies: HygieneDependencies 
         room: room.room,
         projects: [project.project],
         terms: termsFor(toolName),
+        languages: eligibility.languages,
+        technologies: eligibility.technologies,
         limit: 4,
       }).then((value) => ({
         codingLessons: Array.isArray(value?.codingLessons) ? value.codingLessons : [],

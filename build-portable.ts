@@ -97,7 +97,7 @@ async function packageManifest(stagingRoot: string, installer: string, updater: 
     installer,
     updater,
     supportedHarnesses: ["omp"],
-    requiredSchemaVersion: 12,
+    requiredSchemaVersion: 13,
     rustPlatform: rust.platform,
     rust: rust.path,
     artifacts,

@@ -67,6 +67,8 @@ export type GigaPromotionTarget =
         shape: string | null;
         proof_pattern: string | null;
         trigger_context: string | null;
+        language_keys: string[];
+        technology_keys: string[];
         tags: string[];
       };
     }
@@ -78,6 +80,8 @@ export type GigaPromotionTarget =
         project: string;
         proof_pattern: string | null;
         trigger_context: string | null;
+        language_keys: string[];
+        technology_keys: string[];
         tags: string[];
       };
     };
@@ -699,12 +703,14 @@ function validPromotionTarget(target: GigaPromotionTarget): boolean {
       && boundedUniqueNonblankTextArray(payload.threads, 64, 240);
   }
   if (!hasExactKeys(payload, target.kind === "coding_lesson"
-    ? ["title", "body", "shape", "proof_pattern", "trigger_context", "tags"]
-    : ["title", "body", "project", "proof_pattern", "trigger_context", "tags"])) {
+    ? ["title", "body", "shape", "proof_pattern", "trigger_context", "language_keys", "technology_keys", "tags"]
+    : ["title", "body", "project", "proof_pattern", "trigger_context", "language_keys", "technology_keys", "tags"])) {
     return false;
   }
   if (
     !boundedUniqueNonblankTextArray(payload.tags, 64, 240)
+    || !boundedUniqueNonblankTextArray(payload.language_keys, 64, 64)
+    || !boundedUniqueNonblankTextArray(payload.technology_keys, 64, 64)
     || !(payload.proof_pattern === null || isNonblankBoundedString(payload.proof_pattern, 2_000))
     || !(payload.trigger_context === null || isNonblankBoundedString(payload.trigger_context, 2_000))
   ) return false;
@@ -1058,14 +1064,12 @@ export async function closeGigaTransports(): Promise<void> {
       if (timer) clearTimeout(timer);
     }
   }
+  const closing: Promise<void>[] = [];
   for (const [executable, transport] of gigaTransports) {
     gigaTransports.delete(executable);
-    try {
-      transport.close();
-    } catch {
-      // GIGA shutdown is fail-open.
-    }
+    closing.push(transport.close());
   }
+  await Promise.allSettled(closing);
   gigaProcesses.clear();
 }
 

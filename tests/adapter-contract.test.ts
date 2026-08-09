@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -13,10 +13,12 @@ describe("OMP adapter contract", () => {
     const core = await loadHouseCore();
     expect(core.CORE_API_VERSION).toBe(1);
     expect(typeof core.runRecallQuery).toBe("function");
+    expect(typeof core.runVaultRecallQuery).toBe("function");
     expect(typeof core.runAnamnesisQuery).toBe("function");
     expect(typeof core.logUserTurn).toBe("function");
     expect(typeof core.logAssistantTurn).toBe("function");
     expect(typeof (await loadHouseMemory()).runRecallQuery).toBe("function");
+    expect(typeof (await loadHouseMemory()).runVaultRecallQuery).toBe("function");
     expect(typeof (await loadHouseLedger()).logUserTurn).toBe("function");
   });
 
@@ -67,15 +69,6 @@ describe("OMP adapter contract", () => {
     }
   });
 
-  test("keeps core calls behind the public root and fallback argv explicit", async () => {
-    const triggersSource = await readFile(path.join(import.meta.dir, "..", "solarisael-house-proof", "triggers.ts"), "utf8");
-    const recallSource = await readFile(path.join(import.meta.dir, "..", "solarisael-house-proof", "recall.ts"), "utf8");
-    expect(triggersSource).toContain('import { loadHouseCore } from "./core.ts";');
-    expect(triggersSource).not.toContain(["solarisael-house", "src"].join("/"));
-    expect(recallSource.match(/const scriptWsl = windowsPathToWsl\(sourceScript\);/g)).toHaveLength(2);
-    expect(recallSource.match(/"--substrate-dir", substrateDirWsl/g)).toHaveLength(2);
-    expect(recallSource.match(/"--room", room/g)).toHaveLength(2);
-  });
 
   test("retains explicit persisted room markers", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "omp-adapter-marker-"));

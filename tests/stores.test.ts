@@ -155,7 +155,7 @@ describe("buildStoreArgs", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "kind 'project-lesson' does not accept field 'alien'; accepted: project, proofPattern, triggerContext, tags",
+      error: "kind 'project-lesson' does not accept field 'alien'; accepted: project, proofPattern, triggerContext, languageKeys, technologyKeys, tags",
     });
   });
 

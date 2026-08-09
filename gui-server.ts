@@ -22,6 +22,7 @@ export interface GuiServerOptions {
   databasePath?: string;
   host?: string;
   room?: string;
+  transportFactory?: () => RustJsonlTransport;
 }
 export interface GuiServerHandle { server: ReturnType<typeof createServer>; csrfToken: string; port: number; close(): Promise<void> }
 
@@ -84,17 +85,55 @@ async function killTree(child: ReturnType<typeof spawn>): Promise<void> {
     try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
   } else child.kill();
 }
-function command(executable: string, args: string[], cwd: string | undefined, timeout: number): Promise<unknown> {
+type CommandDependencies = {
+  spawnProcess?: typeof spawn;
+  killProcessTree?: typeof killTree;
+};
+export function runCommand(
+  executable: string,
+  args: string[],
+  cwd: string | undefined,
+  timeout: number,
+  dependencies: CommandDependencies = {},
+): Promise<unknown> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(executable, args, { cwd, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
-    const out: Buffer[] = []; let n = 0; let settled = false; let timedOut = false;
+    const child = (dependencies.spawnProcess ?? spawn)(executable, args, {
+      cwd, shell: false, windowsHide: true, detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const out: Buffer[] = [];
+    let n = 0;
+    let settled = false;
+    let timedOut = false;
     let timer: ReturnType<typeof setTimeout>;
-    const collect = (c: Buffer) => { if (n < MAX_OUTPUT) { const x = c.subarray(0, MAX_OUTPUT - n); out.push(x); n += x.length; } };
-    const finish = (fn: (v: any) => void, v: any) => { if (settled) return; settled = true; clearTimeout(timer); fn(v); };
-    child.stdout.on("data", collect); child.stderr.on("data", collect);
-    child.on("error", e => finish(reject, e));
-    child.on("close", (code, signal) => finish(timedOut ? reject : code === 0 ? resolvePromise : reject, timedOut ? new Error("command timed out") : code === 0 ? { ok: true, output: Buffer.concat(out).toString("utf8") } : new Error(`command failed (${signal ?? code})`)));
-    timer = setTimeout(async () => { timedOut = true; await killTree(child); }, timeout);
+    const collect = (chunk: Buffer) => {
+      if (n >= MAX_OUTPUT) return;
+      const accepted = chunk.subarray(0, MAX_OUTPUT - n);
+      out.push(accepted);
+      n += accepted.length;
+    };
+    const finish = (fn: (value: any) => void, value: any) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    child.on("error", error => finish(reject, error));
+    child.on("close", (code, signal) => finish(
+      timedOut ? reject : code === 0 ? resolvePromise : reject,
+      timedOut
+        ? new Error("command timed out")
+        : code === 0
+          ? { ok: true, output: Buffer.concat(out).toString("utf8") }
+          : new Error(`command failed (${signal ?? code})`),
+    ));
+    timer = setTimeout(() => {
+      timedOut = true;
+      void (dependencies.killProcessTree ?? killTree)(child).catch(() => {});
+      finish(reject, new Error("command timed out"));
+    }, timeout);
   });
 }
 
@@ -102,12 +141,27 @@ export function createGuiServer(options: GuiServerOptions): GuiServerHandle {
   const host = options.host ?? "127.0.0.1";
   if (host !== "127.0.0.1" && host !== "localhost") throw new Error("GUI server must bind to 127.0.0.1 or localhost");
   const csrfToken = randomBytes(32).toString("hex");
-  let transport = new RustJsonlTransport({ executable: options.executable, args: options.args, cwd: options.cwd });
+  const newTransport = options.transportFactory
+    ?? (() => new RustJsonlTransport({ executable: options.executable, args: options.args, cwd: options.cwd }));
+  let transport = newTransport();
+  let replacement: Promise<void> | undefined;
+  const replaceTransport = async (failed: RustJsonlTransport) => {
+    if (transport !== failed) return;
+    replacement ??= (async () => {
+      await failed.close();
+      if (transport === failed) {
+        transport = newTransport();
+      }
+    })().finally(() => { replacement = undefined; });
+    await replacement;
+  };
   const requestRust = async (method: string, params: Record<string, unknown>, requestOptions: { timeoutMs?: number; settleDefinitively?: boolean } = {}) => {
-    try { return await transport.request(method, params, requestOptions); }
-    catch (error) {
+    const active = transport;
+    try {
+      return await active.request(method, params, requestOptions);
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (/transport|child exited|closed|unusable|output line/i.test(message)) { transport.close(); transport = new RustJsonlTransport({ executable: options.executable, args: options.args, cwd: options.cwd }); }
+      if (/transport|child exited|closed|unusable|output line/i.test(message)) await replaceTransport(active);
       throw canonicalError(error, method);
     }
   };
@@ -151,7 +205,7 @@ export function createGuiServer(options: GuiServerOptions): GuiServerHandle {
         if (url.pathname === "/api/backup") {
           if (!options.backupRoot) { json(res, 400, { ok: false, error: "backup is not configured" }); return; }
           const keep = options.backupKeep ?? 5;
-          const result = await command(options.executable, [...(options.args ?? []), "backup", "--output-dir", resolve(options.backupRoot), "--keep", String(keep)], options.cwd, 60000); json(res, 200, result); return;
+          const result = await runCommand(options.executable, [...(options.args ?? []), "backup", "--output-dir", resolve(options.backupRoot), "--keep", String(keep)], options.cwd, 60000); json(res, 200, result); return;
         }
         const target = typeof input.targetDb === "string" ? input.targetDb : "";
         const confirm = typeof input.confirm === "string" ? input.confirm : "";
@@ -161,7 +215,7 @@ export function createGuiServer(options: GuiServerOptions): GuiServerHandle {
         if (target !== expected || confirm !== `RESTORE ${expected}`) { json(res, 400, { ok: false, error: "typed confirmation required" }); return; }
         const backupRoot = resolve(options.backupRoot); const selected = resolve(backupRoot, manifest);
         if (!manifest || (selected !== backupRoot && !selected.startsWith(backupRoot + sep)) || !existsSync(selected) || !statSync(selected).isFile()) { json(res, 400, { ok: false, error: "invalid manifest" }); return; }
-        const result = await command(options.executable, [...(options.args ?? []), "restore", "--manifest", selected, "--confirm-database", target], options.cwd, 60000); json(res, 200, result); return;
+        const result = await runCommand(options.executable, [...(options.args ?? []), "restore", "--manifest", selected, "--confirm-database", target], options.cwd, 60000); json(res, 200, result); return;
       }
       if (req.method === "GET") {
         let asset = url.pathname === "/" ? "/index.html" : url.pathname;
@@ -172,7 +226,17 @@ export function createGuiServer(options: GuiServerOptions): GuiServerHandle {
       json(res, 404, { ok: false, error: "not found" });
     } catch (e: any) { errorResponse(res, e?.status === 413 ? 413 : 500, e); }
   });
-  return { server, csrfToken, port: options.port ?? 0, close: async () => { transport.close(); await new Promise<void>(resolveClose => server.close(() => resolveClose())); } };
+  return {
+    server,
+    csrfToken,
+    port: options.port ?? 0,
+    close: async () => {
+      // Drain requests before their worker. Project lesson #338.
+      await new Promise<void>(resolveClose => server.close(() => resolveClose()));
+      if (replacement) await replacement;
+      await transport.close();
+    },
+  };
 }
 export async function startGuiServer(options: GuiServerOptions): Promise<GuiServerHandle> {
   const handle = createGuiServer(options); await new Promise<void>((resolveListen, reject) => { handle.server.once("error", reject); handle.server.listen(handle.port, options.host ?? "127.0.0.1", resolveListen); });
