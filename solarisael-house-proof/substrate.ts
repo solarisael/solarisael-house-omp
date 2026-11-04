@@ -226,7 +226,7 @@ export function runWslDiagnostic({ argv, stdin, timeoutMs = DIAGNOSTIC_TIMEOUT_M
   });
 }
 
-export async function writeSessionMemory({ sharedRoot, room, title, body, backup, type = "session", sourcePath, threads = [], supersedes = [], timeoutMs = WRITE_TIMEOUT_MS }) {
+export async function writeSessionMemory({ sharedRoot, room, title, body, backup, type = "session", sourcePath, threads = [], supersedes = [], continues = [], timeoutMs = WRITE_TIMEOUT_MS }) {
   const { recordMemory } = substratePaths(sharedRoot);
   const resolvedSourcePath = sourcePath
     || `memory/omp_${new Date().toISOString().replace(/[:.]/g, "-")}_${String(title || "memory").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "memory"}.md`;
@@ -241,6 +241,7 @@ export async function writeSessionMemory({ sharedRoot, room, title, body, backup
   ];
   for (const thread of Array.isArray(threads) ? threads : []) argv.push("--thread", String(thread));
   for (const memoryId of Array.isArray(supersedes) ? supersedes : []) argv.push("--supersedes", String(memoryId));
+  for (const continuation of Array.isArray(continues) ? continues : []) argv.push("--continues", JSON.stringify(continuation));
   if (!backup) argv.push("--no-backup");
   const probe = await runWslDiagnostic({ argv, stdin: body, timeoutMs });
   if (probe.timedOut) return { ok: false, error: "record_memory timed out" };

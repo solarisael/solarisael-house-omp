@@ -88,6 +88,10 @@ export function registerSolarisaelTools(pi) {
         .describe("Destination store. memory (default): a thing that happened. coding-lesson: a reusable code rule with a proof pattern. project-lesson: a project-wide rule (requires 'project'). writing-lesson: a prose-taste rule (register, voice, wit mechanics). audio-lesson: an audio-pipeline rule."),
       threads: z.array(z.string()).optional().describe("memory only: thread keys, 'concept / variant / variant'."),
       supersedes: z.array(z.string()).optional().describe("memory only: positive numeric memory IDs replaced by this write; old rows remain recoverable but lose retrieval authority."),
+      continues: z.array(z.object({
+        thread: z.string(),
+        previousMemoryId: z.string(),
+      })).optional().describe("memory only: predecessor edges, one per thread; thread must also appear in threads."),
       shape: z.string().optional().describe("lesson kinds: shape taxonomy value (e.g. process, naming, refusal)."),
       voice: z.string().optional().describe("coding/writing lessons: voice (e.g. kodo, sol-craft)."),
       scope: z.string().optional().describe("coding-lesson: scope (shared or a room name)."),
@@ -111,6 +115,32 @@ export function registerSolarisaelTools(pi) {
           return Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "";
         });
         if (lessonOnly.length > 0) return refuse(`kind 'memory' does not accept: ${lessonOnly.join(", ")} — pick a lesson kind or drop the field(s)`);
+        const threads = [];
+        const seenThreads = new Set();
+        for (const rawThread of params.threads || []) {
+          const thread = rawThread.trim();
+          if (!thread) return refuse("threads must be nonblank");
+          if (!seenThreads.has(thread)) {
+            seenThreads.add(thread);
+            threads.push(thread);
+          }
+        }
+        const continues = [];
+        const continuedThreads = new Set();
+        for (const continuation of params.continues || []) {
+          if (!/^[1-9]\d*$/.test(continuation.previousMemoryId)) {
+            return refuse("continues previousMemoryId must be a positive PostgreSQL BIGINT");
+          }
+          if (BigInt(continuation.previousMemoryId) > 9223372036854775807n) {
+            return refuse("continues previousMemoryId must fit a positive PostgreSQL BIGINT");
+          }
+          const thread = continuation.thread.trim();
+          if (!thread) return refuse("continues thread must be nonblank");
+          if (continuedThreads.has(thread)) return refuse(`continues must contain at most one entry per thread: ${thread}`);
+          if (!seenThreads.has(thread)) return refuse(`continues thread must also be present in threads: ${thread}`);
+          continuedThreads.add(thread);
+          continues.push({ thread, previousMemoryId: continuation.previousMemoryId });
+        }
         const invalidSupersedes = (params.supersedes || []).filter((memoryId) => !/^[1-9]\d*$/.test(memoryId));
         if (invalidSupersedes.length > 0) return refuse(`supersedes accepts positive numeric memory IDs; invalid: ${invalidSupersedes.join(", ")}`);
         const result = await writeSessionMemory({
@@ -119,14 +149,16 @@ export function registerSolarisaelTools(pi) {
           title: params.title,
           body: params.body,
           backup: false,
-          threads: params.threads || [],
+          threads,
           supersedes: [...new Set(params.supersedes || [])],
+          continues,
         });
         return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
       }
 
       if (Array.isArray(params.threads) && params.threads.length > 0) return refuse("threads are memory-only; lesson stores do not take threads");
       if (Array.isArray(params.supersedes) && params.supersedes.length > 0) return refuse("supersedes is memory-only; lesson stores do not supersede memory rows");
+      if (Array.isArray(params.continues) && params.continues.length > 0) return refuse("continues is memory-only; lesson stores do not link memory threads");
       const store = REMEMBER_STORES[kind];
       const built = buildStoreArgs(kind, store, {
         shape: params.shape,

@@ -193,6 +193,17 @@ describe("OMP adapter registration", () => {
           },
           threads: { type: "array", element: { type: "string" }, optional: true },
           supersedes: { type: "array", element: { type: "string" }, optional: true },
+          continues: {
+            type: "array",
+            element: {
+              type: "object",
+              fields: {
+                thread: { type: "string" },
+                previousMemoryId: { type: "string" },
+              },
+            },
+            optional: true,
+          },
           shape: { type: "string", optional: true },
           voice: { type: "string", optional: true },
           scope: { type: "string", optional: true },

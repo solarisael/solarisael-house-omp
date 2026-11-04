@@ -91,6 +91,32 @@ export function filterCanonMatchesForCandidates(
     .slice(0, boundedLimit);
 }
 
+function compactThreadNeighbors(value) {
+  return Array.isArray(value)
+    ? value.slice(0, 6).map((neighbor) => ({
+      thread: neighbor?.thread,
+      direction: neighbor?.direction,
+      id: neighbor?.id,
+      title: neighbor?.title,
+      source_path: neighbor?.source_path,
+      excerpt: text(neighbor?.excerpt).slice(0, 500),
+      authority_state: neighbor?.authority_state,
+      superseded_by: neighbor?.superseded_by,
+    }))
+    : [];
+}
+
+function compactThreadEvidence(value) {
+  const memoryId = value?.memory_id;
+  const threadKey = text(value?.thread_key).trim();
+  const neighbors = compactThreadNeighbors(value?.thread_neighbors);
+  return {
+    ...(memoryId !== undefined && memoryId !== null ? { memory_id: memoryId } : {}),
+    ...(threadKey ? { thread_key: threadKey } : {}),
+    ...(neighbors.length ? { thread_neighbors: neighbors } : {}),
+  };
+}
+
 function compactRetrievalCandidates(result, candidateLimit = 5) {
   const limit = Math.max(0, Math.min(24, Number.isFinite(candidateLimit) ? Math.floor(candidateLimit) : 5));
   return Array.isArray(result?.retrievalCandidates)
@@ -98,6 +124,7 @@ function compactRetrievalCandidates(result, candidateLimit = 5) {
       source_path: candidate?.source_path,
       title: candidate?.title,
       heading_path: candidate?.heading_path,
+      ...compactThreadEvidence(candidate),
       sources: strings(candidate?.sources).slice(0, 4),
       score: candidate?.score,
       term_coverage: candidate?.term_coverage,
@@ -150,6 +177,7 @@ export function compactRecall(result, { includeTaxonomy = false, retrievalCandid
     ? result.semanticChunks.slice(0, 5).map((c) => ({
       source_path: c?.source_path,
       heading_path: c?.heading_path,
+      ...compactThreadEvidence(c),
       sim: c?.sim,
       body: String(c?.body || "").slice(0, 900),
     }))
@@ -158,6 +186,7 @@ export function compactRecall(result, { includeTaxonomy = false, retrievalCandid
     ? result.contentChunks.slice(0, 5).map((c) => ({
       source_path: c?.source_path,
       heading_path: c?.heading_path,
+      ...compactThreadEvidence(c),
       ws: c?.ws,
       body: String(c?.body || "").slice(0, 900),
     }))
@@ -166,6 +195,7 @@ export function compactRecall(result, { includeTaxonomy = false, retrievalCandid
     ? result.dateMatches.slice(0, 5).map((d) => ({
       source_path: d?.source_path,
       title: d?.title,
+      ...compactThreadEvidence(d),
       dates: d?.dates,
       body_excerpt: String(d?.body_excerpt || "").slice(0, 900),
     }))
